@@ -1,0 +1,21 @@
+# Servicio NUEVO e independiente.
+# No aplicar este blueprint sobre aero-doppler-v13 ni borrar servicios existentes.
+# El padre crea el servicio Render y define AERDOPPLER_ACCESS_TOKEN en el panel,
+# nunca en este archivo.
+services:
+  - type: web
+    name: aerodoppler-v14
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: cursor/aerodoppler-v14-cloud-edcb
+    dockerfilePath: ./aerodoppler/Dockerfile
+    dockerContext: ./aerodoppler
+    healthCheckPath: /healthz
+    envVars:
+      - key: AERDOPPLER_ACCESS_TOKEN
+        sync: false
+      - key: AERDOPPLER_COOKIE_SECURE
+        value: "1"
+      - key: PYTHONUNBUFFERED
+        value: "1"

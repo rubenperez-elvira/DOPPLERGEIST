@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>AeroDoppler v14</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">AeroDoppler v14 · uso no comercial</p>
+    <h1>Audio, historia de vuelos y comparación</h1>
+    <p>El audio se procesa en memoria y se borra al terminar. Render Free duerme a los 15 minutos y no conserva archivos. Una curva descendente no es, por sí sola, una aeronave, y un buen residuo no identifica un vuelo de forma única.</p>
+
+    <section>
+      <h2>A · Audio</h2>
+      <form id="audio-form">
+        <label for="audio">WAV, MP3, M4A o MP4 con audio, hasta 90 s y 8 MiB</label>
+        <input id="audio" name="file" type="file" accept=".wav,.mp3,.m4a,.mp4,audio/*,video/mp4" required>
+        <button type="submit">Analizar audio</button>
+      </form>
+      <div id="audio-out"></div>
+    </section>
+
+    <section>
+      <h2>B · Historia de vuelos</h2>
+      <form id="history-form">
+        <label for="place">Lugar, si no indicas coordenadas</label>
+        <input id="place" name="place" autocomplete="off" placeholder="Cabrerizos">
+        <div class="row">
+          <div>
+            <label for="lat">Latitud</label>
+            <input id="lat" name="lat" inputmode="decimal" value="40.97786">
+          </div>
+          <div>
+            <label for="lon">Longitud</label>
+            <input id="lon" name="lon" inputmode="decimal" value="-5.60845">
+          </div>
+        </div>
+        <label for="when">Centro, hora Europe/Madrid</label>
+        <input id="when" name="local_datetime" type="datetime-local" value="2026-11-07T23:30" required>
+        <div class="row">
+          <div>
+            <label for="window">Ventana ± minutos</label>
+            <input id="window" name="window_min" type="number" min="1" max="180" value="30" required>
+          </div>
+          <div>
+            <label for="radius">Radio km</label>
+            <input id="radius" name="radius_km" type="number" min="1" max="120" step="0.1" value="80" required>
+          </div>
+        </div>
+        <label for="provider">Proveedor</label>
+        <select id="provider" name="provider">
+          <option value="adsb_aero">adsb.aero, histórico real</option>
+          <option value="adsb_lol_live">ADSB.lol, solo en vivo: no es historia</option>
+          <option value="flyitaly">FlyItalyADSB, requiere clave</option>
+          <option value="adsblol_globe_archive">Archivo diario global, sin consulta acotada</option>
+        </select>
+        <button type="submit">Consultar historia</button>
+        <button class="secondary" id="preset" type="button">Rellenar caso Cabrerizos</button>
+        <button class="secondary" id="live" type="button">Tráfico en vivo ahora, no es historia</button>
+      </form>
+      <div id="history-out"></div>
+    </section>
+
+    <section>
+      <h2>C · Comparación</h2>
+      <form id="compare-form">
+        <label for="record-start">Inicio de la grabación, Europe/Madrid</label>
+        <input id="record-start" type="datetime-local">
+        <label for="observer-alt">Altitud del observador en metros</label>
+        <input id="observer-alt" type="number" step="1" placeholder="elevación o altura del micrófono">
+        <button class="secondary" id="elevation" type="button">Rellenar elevación del terreno</button>
+        <label for="f0">Frecuencia de reposo en Hz, opcional</label>
+        <input id="f0" type="number" min="20" max="2000" step="0.1">
+        <button type="submit">Comparar pista y trayectorias</button>
+      </form>
+      <canvas id="map" width="900" height="640"></canvas>
+      <div id="compare-out"></div>
+    </section>
+
+    <p class="fine">Software de este repositorio: PolyForm Noncommercial 1.0.0. Required Notice: Copyright 2026 Cinna Davis. Datos de vuelo ODbL vía adsb.lol / adsb.aero, con cobertura desconocida. <a href="/license.txt">Licencia</a>. <button class="secondary" id="logout" type="button">Salir</button></p>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

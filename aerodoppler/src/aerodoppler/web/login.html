@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Entrar · AeroDoppler v14</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="sheet">
+    <p class="eyebrow">AeroDoppler v14</p>
+    <h1>Acceso restringido</h1>
+    <p>Uso no comercial y personal. El código no viaja en la dirección ni se guarda en el código de la página.</p>
+    <form id="login" method="post" action="/login">
+      <label for="access_code">Código de acceso</label>
+      <input id="access_code" name="access_code" type="password" autocomplete="current-password" required minlength="20">
+      <button type="submit">Entrar</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+    <p class="fine">PolyForm Noncommercial 1.0.0. Required Notice: Copyright 2026 Cinna Davis. <a href="/license.txt">Licencia</a>.</p>
+  </main>
+  <script src="/static/login.js"></script>
+</body>
+</html>

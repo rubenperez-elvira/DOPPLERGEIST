@@ -1,0 +1,14 @@
+Required Notice: Copyright 2026 Cinna Davis
+
+AeroDoppler v14 Cloud is a noncommercial adaptation in the
+rubenperez-elvira/DOPPLERGEIST fork of
+https://github.com/1337isnot1337/DOPPLERGEIST
+The software in this repository is distributed under the PolyForm
+Noncommercial License 1.0.0. See LICENSE. It is source-available.
+GitHub classifies that license as Other / source-available, not as a
+permissive OSI license.
+
+Flight positions queried at runtime remain under their providers' terms.
+adsb.aero documents its trajectories as derived from the adsb.lol archive
+under the Open Database License 1.0. This application does not relicense
+those positions.
