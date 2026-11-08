@@ -11,6 +11,7 @@ autorización.
 
 ## Qué hace
 
+- **Posición.** Con el audio, una hora de inicio incierta y una zona amplia, puntúa celdas contra trayectorias históricas no reactor. El centro de la zona no es el resultado. Una sola pasada queda ambigua. Si el audio o los aviones no bastan, no hay coordenada.
 - **A.** Extrae el audio de WAV, MP3, M4A o MP4, calcula un espectrograma STFT,
   sigue una pista tonal y ajusta un paso recto con retardo acústico. Rechaza
   silencio, ruido y un descenso que no se distinga de una recta. No llama

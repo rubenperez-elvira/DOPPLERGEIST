@@ -21,6 +21,7 @@ from . import __version__
 from .audio_engine import AudioRejected, analyze_samples, decode_audio, ridge_csv, sniff_media
 from .auth import COOKIE, LoginLimiter, origin_allowed, request_authorized, session_value, token_matches, unauthorized
 from .compare import compare_csv, compare_tracks
+from .inverse import hypotheses_csv, locate_microphone
 from .config import Settings, load_settings
 from .history import PROVIDERS, flights_csv, query_history, query_live_adsb_lol
 
@@ -249,6 +250,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _error(422, "comparacion", str(error))
         result["csv"] = compare_csv(result)
         result["stored"] = False
+        return result
+
+    @app.post("/api/locate")
+    async def locate(request: Request):
+        blocked = _guard(request, settings, browser=True)
+        if blocked:
+            return blocked
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError:
+            return _error(400, "json", "El cuerpo no es JSON.")
+        if not isinstance(payload, dict):
+            return _error(400, "json", "La búsqueda tiene que ser un objeto.")
+        try:
+            prior = dict(payload.get("prior") or {})
+            result = await asyncio.wait_for(asyncio.to_thread(
+                locate_microphone,
+                payload.get("ridge"),
+                payload.get("flights") or [],
+                prior,
+                _parse_local(str(payload.get("recording_start_local") or "")).timestamp() if payload.get("recording_start_local") else payload.get("recording_start_unix"),
+                float(payload.get("uncertainty_s") if payload.get("uncertainty_s") is not None else float(payload.get("uncertainty_min", 0)) * 60.0),
+                None if payload.get("altitude_m") in (None, "") else float(payload["altitude_m"]),
+                history_status=payload.get("history_status"),
+            ), timeout=settings.analysis_timeout_s)
+        except TimeoutError:
+            return _error(408, "tiempo_agotado", "La búsqueda de posición superó el tiempo permitido.")
+        except ValueError as error:
+            return _error(422, "busqueda", str(error))
+        result["csv"] = hypotheses_csv(result)
+        result["stored"] = False
+        result["mode"] = "inverse_search"
         return result
 
     @app.exception_handler(Exception)

@@ -1,4 +1,5 @@
-const state = { analysis: null, history: null };
+const state = { analysis: null, history: null, location: null };
+const locateOut = document.querySelector("#locate-out");
 const audioOut = document.querySelector("#audio-out");
 const historyOut = document.querySelector("#history-out");
 const compareOut = document.querySelector("#compare-out");
@@ -22,6 +23,144 @@ function download(filename, text, type) {
   link.download = filename;
   link.textContent = filename;
   return link;
+}
+
+document.querySelector("#locate-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  locateOut.textContent = "Analizando el audio. La zona marcada no es la respuesta.";
+  const audioField = document.querySelector("#locate-audio");
+  const body = new FormData();
+  body.append("file", audioField.files[0]);
+  const analysisResponse = await fetch("/api/analyze", { method: "POST", body, credentials: "same-origin" });
+  const analysis = await analysisResponse.json().catch(() => ({}));
+  if (!analysisResponse.ok) {
+    locateOut.textContent = analysis.message || "No se pudo leer el audio.";
+    return;
+  }
+  state.analysis = analysis;
+  if (analysis.status !== "accepted") {
+    renderLocation({
+      status: "no_usable_event",
+      message: analysis.message || "El audio no tiene una pista utilizable.",
+      hypotheses: [],
+      prior_is_result: false,
+    });
+    return;
+  }
+  const radius = Number(document.querySelector("#locate-radius").value);
+  const uncertainty = Number(document.querySelector("#locate-uncertainty").value);
+  const place = document.querySelector("#locate-place").value;
+  locateOut.textContent = "Consultando trayectorias históricas en una zona más amplia que la búsqueda.";
+  let history;
+  try {
+    history = await postJSON("/api/history", {
+      place,
+      lat: document.querySelector("#locate-lat").value,
+      lon: document.querySelector("#locate-lon").value,
+      local_datetime: document.querySelector("#locate-when").value,
+      window_min: Math.min(180, uncertainty + 3),
+      radius_km: Math.min(120, radius + 25),
+      provider: "adsb_aero",
+    });
+  } catch (error) {
+    renderLocation({ status: "incomplete", message: error.message, hypotheses: [], prior_is_result: false });
+    return;
+  }
+  state.history = history;
+  if (!history.flights) {
+    renderLocation({
+      status: "incomplete",
+      reason: history.status,
+      message: history.message,
+      hypotheses: [],
+      prior_is_result: false,
+      zero_flights_claim: false,
+    });
+    return;
+  }
+  locateOut.textContent = "Puntuando celdas. El centro de la zona no se toma como micrófono.";
+  try {
+    const found = await postJSON("/api/locate", {
+      ridge: { ...analysis.ridge, status: analysis.status },
+      flights: history.flights,
+      prior: {
+        lat: Number(document.querySelector("#locate-lat").value),
+        lon: Number(document.querySelector("#locate-lon").value),
+        radius_km: radius,
+      },
+      recording_start_local: document.querySelector("#locate-when").value,
+      uncertainty_min: uncertainty,
+      altitude_m: document.querySelector("#locate-alt").value,
+      history_status: history.status,
+    });
+    state.location = found;
+    renderLocation(found);
+  } catch (error) {
+    locateOut.textContent = error.message;
+  }
+});
+
+function renderLocation(result) {
+  const card = document.createElement("div");
+  card.className = "card";
+  const title = document.createElement("h3");
+  title.textContent = "Estado: " + (result.status || "sin estado");
+  const message = document.createElement("p");
+  message.textContent = result.message || "";
+  const note = document.createElement("p");
+  note.textContent = "Identificación única: no. El centro de búsqueda no es un punto recuperado.";
+  card.append(title, message, note);
+  if (result.resolution_m) {
+    const resolution = document.createElement("p");
+    resolution.textContent = "Resolución de la rejilla: " + Math.round(result.resolution_m) + " m.";
+    card.append(resolution);
+  }
+  const table = document.createElement("table");
+  table.innerHTML = "<tr><th>Hipótesis</th><th>Latitud</th><th>Longitud</th><th>RMSE</th></tr>";
+  (result.hypotheses || []).forEach((item, index) => {
+    const row = document.createElement("tr");
+    row.innerHTML = "<td></td><td></td><td></td><td></td>";
+    const cells = row.querySelectorAll("td");
+    cells[0].textContent = String(index + 1);
+    cells[1].textContent = Number(item.lat).toFixed(4);
+    cells[2].textContent = Number(item.lon).toFixed(4);
+    cells[3].textContent = item.rmse_hz == null ? "" : Number(item.rmse_hz).toFixed(2) + " Hz";
+    table.append(row);
+  });
+  card.append(table);
+  if (result.csv) card.append(download("hipotesis.csv", result.csv, "text/csv"));
+  card.append(download("busqueda.json", JSON.stringify(result, null, 2), "application/json"));
+  locateOut.replaceChildren(card);
+  drawSearch(result.hypotheses || []);
+}
+
+function drawSearch(hypotheses) {
+  const canvas = document.querySelector("#locate-map");
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  const lat = Number(document.querySelector("#locate-lat").value);
+  const lon = Number(document.querySelector("#locate-lon").value);
+  const radius = Number(document.querySelector("#locate-radius").value) || 20;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+  const kx = 111.32 * Math.cos(lat * Math.PI / 180);
+  const ky = 110.57;
+  const span = radius * 1.2;
+  const project = (pointLat, pointLon) => [
+    canvas.width / 2 + ((pointLon - lon) * kx) / span * (canvas.width * 0.4),
+    canvas.height / 2 - ((pointLat - lat) * ky) / span * (canvas.height * 0.4),
+  ];
+  context.strokeStyle = "#314052";
+  context.beginPath();
+  context.arc(canvas.width / 2, canvas.height / 2, canvas.width * 0.4 * (radius / span), 0, Math.PI * 2);
+  context.stroke();
+  context.fillStyle = "#8fb4d6";
+  context.fillText("zona de búsqueda", 16, 24);
+  hypotheses.forEach((item, index) => {
+    const [x, y] = project(item.lat, item.lon);
+    context.fillStyle = index === 0 ? "#f0c674" : "#7dcea0";
+    context.fillRect(x - 5, y - 5, 10, 10);
+  });
 }
 
 document.querySelector("#audio-form").addEventListener("submit", async (event) => {

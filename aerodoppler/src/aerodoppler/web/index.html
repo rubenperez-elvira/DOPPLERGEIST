@@ -10,8 +10,45 @@
 <body>
   <main>
     <p class="eyebrow">AeroDoppler v14 · uso no comercial</p>
-    <h1>Audio, historia de vuelos y comparación</h1>
-    <p>El audio se procesa en memoria y se borra al terminar. Render Free duerme a los 15 minutos y no conserva archivos. Una curva descendente no es, por sí sola, una aeronave, y un buen residuo no identifica un vuelo de forma única.</p>
+    <h1>Dónde se grabó el audio</h1>
+    <p>El audio se procesa en memoria y se borra al terminar. Render Free duerme a los 15 minutos y no conserva archivos. La zona que indicas es el área donde buscar el micrófono, no la respuesta. Una sola pasada no da una coordenada única.</p>
+
+    <section>
+      <h2>Buscar la zona de la grabación</h2>
+      <form id="locate-form">
+        <label for="locate-audio">WAV, MP3, M4A o MP4 con audio</label>
+        <input id="locate-audio" name="file" type="file" accept=".wav,.mp3,.m4a,.mp4,audio/*,video/mp4" required>
+        <label for="locate-when">Inicio aproximado, Europe/Madrid</label>
+        <input id="locate-when" type="datetime-local" required>
+        <div class="row">
+          <div>
+            <label for="locate-uncertainty">Incertidumbre ± minutos</label>
+            <input id="locate-uncertainty" type="number" min="0" max="60" value="15" required>
+          </div>
+          <div>
+            <label for="locate-radius">Radio de búsqueda km</label>
+            <input id="locate-radius" type="number" min="1" max="40" step="1" value="20" required>
+          </div>
+        </div>
+        <label for="locate-place">Lugar solo para centrar la zona</label>
+        <input id="locate-place" autocomplete="off" placeholder="Cabrerizos">
+        <div class="row">
+          <div>
+            <label for="locate-lat">Latitud del centro de búsqueda</label>
+            <input id="locate-lat" inputmode="decimal" value="40.97786">
+          </div>
+          <div>
+            <label for="locate-lon">Longitud del centro de búsqueda</label>
+            <input id="locate-lon" inputmode="decimal" value="-5.60845">
+          </div>
+        </div>
+        <label for="locate-alt">Altitud supuesta en toda la zona, metros</label>
+        <input id="locate-alt" type="number" step="1" value="827" required>
+        <button type="submit">Estimar hipótesis de posición</button>
+      </form>
+      <canvas id="locate-map" width="900" height="640"></canvas>
+      <div id="locate-out"></div>
+    </section>
 
     <section>
       <h2>A · Audio</h2>
@@ -65,7 +102,8 @@
     </section>
 
     <section>
-      <h2>C · Comparación</h2>
+      <h2>C · Comparación en un punto ya conocido</h2>
+      <p>Esto no busca el micrófono. Solo compara el audio con aviones vistos desde coordenadas que tú fijas.</p>
       <form id="compare-form">
         <label for="record-start">Inicio de la grabación, Europe/Madrid</label>
         <input id="record-start" type="datetime-local">
