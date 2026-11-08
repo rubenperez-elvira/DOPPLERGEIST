@@ -4,8 +4,21 @@ const audioOut = document.querySelector("#audio-out");
 const historyOut = document.querySelector("#history-out");
 const compareOut = document.querySelector("#compare-out");
 
+const REQUEST_TIMEOUT_MS = 45000;
+
+async function fetchLimited(url, options) {
+  try {
+    return await fetch(url, { ...options, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  } catch (error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError") {
+      throw new Error("La petición superó el tiempo de espera. Prueba de nuevo.");
+    }
+    throw new Error("No hay conexión con el servidor. Comprueba la red e inténtalo otra vez.");
+  }
+}
+
 async function postJSON(url, payload) {
-  const response = await fetch(url, {
+  const response = await fetchLimited(url, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -27,14 +40,31 @@ function download(filename, text, type) {
 
 document.querySelector("#locate-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  locateOut.textContent = "Analizando el audio. La zona marcada no es la respuesta.";
+  const button = document.querySelector("#locate-submit");
+  const problems = [];
   const audioField = document.querySelector("#locate-audio");
+  if (!audioField.files || !audioField.files[0]) problems.push("Elige un archivo de audio.");
+  if (!document.querySelector("#locate-when").value) problems.push("Indica la fecha y hora de inicio.");
+  const radius = Number(document.querySelector("#locate-radius").value);
+  const uncertainty = Number(document.querySelector("#locate-uncertainty").value);
+  const altitude = document.querySelector("#locate-alt").value;
+  if (!Number.isFinite(radius) || radius < 1 || radius > 40) problems.push("El radio de búsqueda tiene que estar entre 1 y 40 km.");
+  if (!Number.isFinite(uncertainty) || uncertainty < 0 || uncertainty > 60) problems.push("La incertidumbre tiene que estar entre 0 y 60 minutos.");
+  if (altitude === "" || !Number.isFinite(Number(altitude))) problems.push("Indica la altitud supuesta de la zona.");
+  if (problems.length) {
+    showLocateMessage(problems.join(" "));
+    return;
+  }
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  showLocateMessage("Analizando el audio. La zona marcada no es la respuesta.");
+  try {
   const body = new FormData();
   body.append("file", audioField.files[0]);
-  const analysisResponse = await fetch("/api/analyze", { method: "POST", body, credentials: "same-origin" });
+  const analysisResponse = await fetchLimited("/api/analyze", { method: "POST", body, credentials: "same-origin" });
   const analysis = await analysisResponse.json().catch(() => ({}));
   if (!analysisResponse.ok) {
-    locateOut.textContent = analysis.message || "No se pudo leer el audio.";
+    showLocateMessage(analysis.message || "No se pudo leer el audio.");
     return;
   }
   state.analysis = analysis;
@@ -47,10 +77,8 @@ document.querySelector("#locate-form").addEventListener("submit", async (event) 
     });
     return;
   }
-  const radius = Number(document.querySelector("#locate-radius").value);
-  const uncertainty = Number(document.querySelector("#locate-uncertainty").value);
   const place = document.querySelector("#locate-place").value;
-  locateOut.textContent = "Consultando trayectorias históricas en una zona más amplia que la búsqueda.";
+  showLocateMessage("Consultando trayectorias históricas en una zona más amplia que la búsqueda.");
   let history;
   try {
     history = await postJSON("/api/history", {
@@ -78,7 +106,7 @@ document.querySelector("#locate-form").addEventListener("submit", async (event) 
     });
     return;
   }
-  locateOut.textContent = "Puntuando celdas. El centro de la zona no se toma como micrófono.";
+    showLocateMessage("Puntuando celdas. El centro de la zona no se toma como micrófono.");
   try {
     const found = await postJSON("/api/locate", {
       ridge: { ...analysis.ridge, status: analysis.status },
@@ -96,9 +124,23 @@ document.querySelector("#locate-form").addEventListener("submit", async (event) 
     state.location = found;
     renderLocation(found);
   } catch (error) {
-    locateOut.textContent = error.message;
+    showLocateMessage(error.message || "No se pudo completar la búsqueda.");
+  }
+  } catch (error) {
+    showLocateMessage(error.message || "No se pudo completar la búsqueda.");
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
   }
 });
+
+function showLocateMessage(text) {
+  locateOut.replaceChildren();
+  const message = document.createElement("p");
+  message.className = "error";
+  message.textContent = text;
+  locateOut.append(message);
+}
 
 function renderLocation(result) {
   const card = document.createElement("div");

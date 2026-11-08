@@ -15,7 +15,7 @@
 
     <section>
       <h2>Buscar la zona de la grabación</h2>
-      <form id="locate-form">
+      <form id="locate-form" novalidate>
         <label for="locate-audio">WAV, MP3, M4A o MP4 con audio</label>
         <input id="locate-audio" name="file" type="file" accept=".wav,.mp3,.m4a,.mp4,audio/*,video/mp4" required>
         <label for="locate-when">Inicio aproximado, Europe/Madrid</label>
@@ -44,10 +44,10 @@
         </div>
         <label for="locate-alt">Altitud supuesta en toda la zona, metros</label>
         <input id="locate-alt" type="number" step="1" value="827" required>
-        <button type="submit">Estimar hipótesis de posición</button>
+        <button id="locate-submit" type="submit">Estimar hipótesis de posición</button>
       </form>
       <canvas id="locate-map" width="900" height="640"></canvas>
-      <div id="locate-out"></div>
+      <div id="locate-out" role="status" aria-live="assertive"></div>
     </section>
 
     <section>

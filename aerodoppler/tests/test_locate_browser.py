@@ -1,0 +1,242 @@
+"""Click the location button in a real browser and require a visible outcome."""
+
+import asyncio
+import json
+import os
+import socket
+import sys
+import subprocess
+import threading
+import time
+import urllib.request
+from pathlib import Path
+
+import pytest
+
+websockets = pytest.importorskip("websockets")
+
+
+def _free_port():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.fixture(scope="module")
+def ui(tmp_path_factory):
+    if not shutil_which("google-chrome"):
+        pytest.skip("google-chrome no está disponible")
+    port = _free_port()
+    debug = _free_port()
+    token = "prueba-navegador-local-v14-segura"
+    env = os.environ.copy()
+    env.update({
+        "AERDOPPLER_ACCESS_TOKEN": token,
+        "AERDOPPLER_COOKIE_SECURE": "0",
+        "PORT": str(port),
+        "PYTHONPATH": "/workspace/aerodoppler/src",
+    })
+    server = subprocess.Popen(
+        [sys.executable, "-m", "aerodoppler"],
+        cwd="/workspace", env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    profile = tmp_path_factory.mktemp("chrome")
+    chrome = subprocess.Popen(
+        ["google-chrome", "--headless=new", "--disable-gpu", "--no-sandbox", f"--user-data-dir={profile}",
+         f"--remote-debugging-port={debug}", "about:blank"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        _wait(f"http://127.0.0.1:{port}/healthz")
+        version = json.load(urllib.request.urlopen(f"http://127.0.0.1:{debug}/json/version"))
+        page = Browser(version["webSocketDebuggerUrl"], f"http://127.0.0.1:{port}/", token)
+        page.open()
+        yield page
+        page.close()
+    finally:
+        chrome.terminate()
+        server.terminate()
+        chrome.wait(timeout=5)
+        server.wait(timeout=5)
+
+
+def test_empty_click_shows_what_is_missing(ui):
+    ui.reload()
+    ui.click("#locate-submit")
+    text = ui.text("#locate-out")
+    assert "Elige un archivo de audio" in text
+    assert "fecha y hora" in text
+    assert ui.eval("document.querySelector('#locate-submit').disabled") is False
+
+
+def test_click_shows_progress_then_server_error(ui, tmp_path):
+    ui.reload()
+    wav = tmp_path / "tiny.wav"
+    wav.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+    ui.set_value("#locate-when", "2026-11-07T23:24")
+    ui.set_file("#locate-audio", wav)
+    ui.eval("""
+      const orig = window.fetch;
+      window.fetch = async (...args) => {
+        window.__progress = document.querySelector('#locate-out').textContent;
+        window.__busy = document.querySelector('#locate-submit').disabled;
+        return orig(...args);
+      };
+    """)
+    ui.click("#locate-submit")
+    ui.wait_text("No se pudo leer")
+    assert "Analizando el audio" in ui.eval("window.__progress")
+    assert ui.eval("window.__busy") is True
+    assert ui.eval("document.querySelector('#locate-submit').disabled") is False
+
+
+def test_network_failure_is_visible(ui, tmp_path):
+    ui.reload()
+    wav = tmp_path / "tiny.wav"
+    wav.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+    ui.set_value("#locate-when", "2026-11-07T23:24")
+    ui.set_file("#locate-audio", wav)
+    ui.eval("window.fetch = () => Promise.reject(new TypeError('Failed to fetch'))")
+    ui.click("#locate-submit")
+    ui.wait_text("No hay conexión")
+    assert ui.eval("document.querySelector('#locate-submit').disabled") is False
+
+
+def test_timeout_is_visible(ui, tmp_path):
+    ui.reload()
+    wav = tmp_path / "tiny.wav"
+    wav.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+    ui.set_value("#locate-when", "2026-11-07T23:24")
+    ui.set_file("#locate-audio", wav)
+    ui.eval("""
+      window.fetch = () => new Promise((_resolve, reject) => {
+        setTimeout(() => reject(new DOMException('aborted', 'AbortError')), 300);
+      });
+    """)
+    ui.click("#locate-submit")
+    ui.wait_text("tiempo de espera", timeout=5)
+    assert ui.eval("document.querySelector('#locate-submit').disabled") is False
+
+
+class Browser:
+    def __init__(self, websocket_url, page_url, token):
+        self.websocket_url = websocket_url
+        self.page_url = page_url
+        self.token = token
+        self.session = None
+        self._next = 0
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        self.thread.start()
+
+    def open(self):
+        self._run(self._open())
+
+    def close(self):
+        self.loop.call_soon_threadsafe(self.loop.stop)
+
+    def reload(self):
+        self._run(self._reload())
+
+    async def _reload(self):
+        await self._call("Page.navigate", {"url": self.page_url})
+        await self._loaded()
+
+    def click(self, selector):
+        self.eval(f"document.querySelector({json.dumps(selector)}).click()")
+
+    def text(self, selector):
+        return self.eval(f"document.querySelector({json.dumps(selector)}).innerText")
+
+    def set_value(self, selector, value):
+        self.eval(f"document.querySelector({json.dumps(selector)}).value = {json.dumps(value)}")
+
+    def set_file(self, selector, path: Path):
+        self._run(self._set_file(selector, path))
+
+    def eval(self, expression):
+        return self._run(self._eval(expression))
+
+    def wait_text(self, snippet, timeout=8):
+        deadline = time.time() + timeout
+        last = ""
+        while time.time() < deadline:
+            last = self.text("#locate-out") or ""
+            if snippet in last:
+                return last
+            time.sleep(0.15)
+        raise AssertionError(f"no apareció {snippet!r}; texto={last!r}")
+
+    def _run(self, coro):
+        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=20)
+
+    async def _open(self):
+        self._ws = await websockets.connect(self.websocket_url, max_size=8_000_000)
+        target = await self._call("Target.createTarget", {"url": "about:blank"})
+        attached = await self._call("Target.attachToTarget", {"targetId": target["targetId"], "flatten": True})
+        self.session = attached["sessionId"]
+        await self._call("Page.enable")
+        await self._call("Runtime.enable")
+        await self._call("DOM.enable")
+        await self._call("Network.enable")
+        await self._call("Emulation.setDeviceMetricsOverride", {
+            "width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True,
+        })
+        import hashlib
+        import hmac
+        cookie = hmac.new(self.token.encode(), b"aerodoppler-v14-session", hashlib.sha256).hexdigest()
+        await self._call("Network.setCookie", {"name": "ad_session", "value": cookie, "url": self.page_url})
+        await self._call("Page.navigate", {"url": self.page_url})
+        await self._loaded()
+
+    async def _eval(self, expression):
+        result = await self._call("Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        details = result.get("exceptionDetails")
+        if details:
+            raise AssertionError(details.get("text") or details)
+        return result.get("result", {}).get("value")
+
+    async def _set_file(self, selector, path):
+        document = await self._call("DOM.getDocument")
+        found = await self._call("DOM.querySelector", {"nodeId": document["root"]["nodeId"], "selector": selector})
+        await self._call("DOM.setFileInputFiles", {"nodeId": found["nodeId"], "files": [str(path)]})
+
+    async def _loaded(self):
+        for _ in range(40):
+            result = await self._call("Runtime.evaluate", {
+                "expression": "document.querySelector('#locate-submit') ? 'ready' : ''",
+                "returnByValue": True,
+            })
+            if result.get("result", {}).get("value") == "ready":
+                return
+            await asyncio.sleep(0.1)
+        raise AssertionError("la página no mostró el botón")
+
+    async def _call(self, method, params=None):
+        self._next += 1
+        message = {"id": self._next, "method": method, "params": params or {}}
+        if self.session:
+            message["sessionId"] = self.session
+        await self._ws.send(json.dumps(message))
+        while True:
+            raw = json.loads(await self._ws.recv())
+            if raw.get("id") == self._next:
+                if "error" in raw:
+                    raise AssertionError(raw["error"])
+                return raw.get("result") or {}
+
+
+def _wait(url):
+    for _ in range(40):
+        try:
+            urllib.request.urlopen(url, timeout=0.3)
+            return
+        except Exception:
+            time.sleep(0.15)
+    raise AssertionError(url)
+
+
+def shutil_which(name):
+    from shutil import which
+    return which(name)
+
