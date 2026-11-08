@@ -41,10 +41,11 @@ Render inyecta `PORT`. Salud: `GET /healthz`. Listo para tráfico útil: `GET /r
 responde 503 hasta que existan el token y ffmpeg. Sin token, el análisis y las
 consultas responden 503.
 
-El blueprint está en `render.yaml`. Hay que crear un servicio nuevo, plan Free,
-Dockerfile `aerodoppler/Dockerfile`, contexto `aerodoppler`, rama
-`cursor/aerodoppler-v14-cloud-edcb`. El token se define en el panel de Render,
-no en el repositorio. No aplicar el blueprint sobre el servicio v13.
+El blueprint está en `render.yaml`. Crea solo el servicio nuevo Free
+`aerodoppler-v14` en Frankfurt, con `autoDeployTrigger: off`. Render genera
+`AERDOPPLER_ACCESS_TOKEN` y no lo guarda en el repositorio. Tras aprobar el
+blueprint, el valor se consulta en Environment de ese servicio. No aplicar el
+blueprint sobre el servicio v13.
 
 ## Pruebas ejecutadas aquí
 
