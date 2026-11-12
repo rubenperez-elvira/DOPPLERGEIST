@@ -49,6 +49,9 @@ button.secondary { background: transparent; color: var(--ink); }
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
 .eyebrow { letter-spacing: .08em; text-transform: uppercase; font-size: .78rem; color: var(--accent); margin: 0; }
 .error { color: var(--bad); min-height: 1.2em; }
+.verdict { color: var(--ink); font-size: 1.15rem; }
+.verdict-weak, .verdict-ambiguous { color: var(--warn); }
+.verdict-failed { color: var(--bad); }
 .warn { color: var(--warn); }
 .fine, .fine a { color: var(--muted); font-size: .9rem; }
 img, canvas { width: 100%; height: auto; border-radius: 12px; background: #070b10; }

@@ -102,6 +102,48 @@ def test_network_failure_is_visible(ui, tmp_path):
     assert ui.eval("document.querySelector('#locate-submit').disabled") is False
 
 
+def test_verdict_and_regions_render_in_spanish(ui):
+    ui.reload()
+    ui.eval("""
+      renderLocation({
+        verdict: "ambiguous",
+        verdict_label: "Ambiguo",
+        summary: "Varias zonas explican los datos.",
+        show_point: false,
+        point_is_certain: false,
+        reported_point: null,
+        hypotheses: [{lat: 40.02, lon: -3.98, rmse_hz: 1.2}],
+        regions: {"68": {radius_m: 800, cells: []}, "90": {radius_m: 1600, cells: [{lat: 40.02, lon: -3.98}]}},
+        clock: {shared: true, offset_s: 18, step_s: 2, spread_68_s: 2},
+        flags: [{message: "Hay otro mínimo."}],
+        resolution_m: 375
+      });
+    """)
+    text = ui.text("#locate-out")
+    assert "Veredicto: Ambiguo" in text
+    assert "No se marca un punto ganador" in text
+    assert "Región del 68 %: 800 m" in text
+    assert "Región del 90 %: 1600 m" in text
+    assert "Desfase de reloj común" in text
+    assert "18.0 s" in text
+    assert "Ningún punto se muestra como seguro" in text
+    ui.eval("""
+      renderLocation({
+        verdict: "failed",
+        verdict_label: "Insuficiente",
+        summary: "Los datos no sostienen una posición.",
+        show_point: false,
+        hypotheses: [],
+        regions: {"68": {radius_m: null, cells: []}, "90": {radius_m: null, cells: []}},
+        clock: {shared: false}
+      });
+    """)
+    failed = ui.text("#locate-out")
+    assert "Veredicto: Insuficiente" in failed
+    assert "No hay región del 68 %" in failed
+    assert "no se separa el lugar del desfase" in failed
+
+
 def test_timeout_is_visible(ui, tmp_path):
     ui.reload()
     wav = tmp_path / "tiny.wav"

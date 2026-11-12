@@ -274,6 +274,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 float(payload.get("uncertainty_s") if payload.get("uncertainty_s") is not None else float(payload.get("uncertainty_min", 0)) * 60.0),
                 None if payload.get("altitude_m") in (None, "") else float(payload["altitude_m"]),
                 history_status=payload.get("history_status"),
+                events=_events_or_none(payload.get("events")),
             ), timeout=settings.analysis_timeout_s)
         except TimeoutError:
             return _error(408, "tiempo_agotado", "La búsqueda de posición superó el tiempo permitido.")
@@ -391,6 +392,19 @@ def _elevation(lat: float, lon: float) -> float:
     if not -500 <= value <= 9000:
         raise ValueError("elevación fuera de rango")
     return value
+
+
+def _events_or_none(events):
+    if events is None:
+        return None
+    if not isinstance(events, list) or len(events) > 4:
+        raise ValueError("Se admiten como máximo 4 eventos acústicos.")
+    for item in events:
+        if not isinstance(item, dict) or len(item.get("time_s") or []) > 2000:
+            raise ValueError("Un evento de audio no es válido.")
+        if len(item.get("time_s") or []) != len(item.get("frequency_hz") or []):
+            raise ValueError("Un evento de audio está incompleto.")
+    return events
 
 
 def _compare_payload(payload: dict) -> dict:
