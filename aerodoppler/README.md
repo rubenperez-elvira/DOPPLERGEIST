@@ -11,7 +11,7 @@ autorización.
 
 ## Qué hace
 
-- **Posición.** Con el audio, una hora de inicio incierta y una zona amplia, puntúa celdas contra trayectorias históricas no reactor. El centro de la zona no es el resultado. Una sola pasada queda ambigua. Si el audio o los aviones no bastan, no hay coordenada.
+- **Posición.** Con el audio, una hora de inicio incierta y una zona amplia, puntúa celdas contra trayectorias históricas no reactor. El centro de la zona no es el resultado. El resultado lleva un veredicto (`ok` / `weak` / `ambiguous` / `failed`, en pantalla: compatible, débil, ambiguo, insuficiente) y, cuando hay ajuste, regiones del 68 % y del 90 %. Esas regiones no están calibradas con grabaciones reales y ningún punto se marca como seguro. Una sola pasada queda ambigua. Con dos o más pistas el desfase de reloj es común a todas. Si el audio o los aviones no bastan, el veredicto es insuficiente y no hay región. Fuera de EE. UU. la altitud es la supuesta, plana, sin terreno USGS.
 - **A.** Extrae el audio de WAV, MP3, M4A o MP4, calcula un espectrograma STFT,
   sigue una pista tonal y ajusta un paso recto con retardo acústico. Rechaza
   silencio, ruido y un descenso que no se distinga de una recta. No llama
@@ -54,7 +54,15 @@ blueprint sobre el servicio v13.
 PYTHONPATH=aerodoppler/src pytest -q aerodoppler/tests
 ```
 
-20 pruebas pasaron en la VM de desarrollo. El detalle medido está en `AUDIT.md`.
+34 pruebas pasaron y 1 se omitió porque la grabación privada no está montada.
+En sintético, con la misma física del buscador, un centro de búsqueda a 2,5 km al
+norte y 2,0 km al este del micrófono, y una rejilla de 1,5 km afinada a 375 m:
+tres pasadas que se cruzan y reloj conocido dieron veredicto compatible, error
+177 m, radio del 68 % 842 m y del 90 % 1353 m. Dos pasadas con el reloj
+desfasado 18 s recuperaron esos 18 s; el veredicto fue ambiguo y no se marcó un
+punto (radios 1886 m y 3876 m). Dos pasadas paralelas quedaron ambiguas. Un
+reloj fuera de la ventana quedó insuficiente, sin región. Es consistencia
+interna, no una precisión sobre grabaciones reales.
 
 Pendiente, y no sustituible por esta VM: Safari en un iPhone real (botones,
 selector de archivos y subida) y el despliegue real en Render con sus registros.

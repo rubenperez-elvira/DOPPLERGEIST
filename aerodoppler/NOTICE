@@ -8,6 +8,15 @@ Noncommercial License 1.0.0. See LICENSE. It is source-available.
 GitHub classifies that license as Other / source-available, not as a
 permissive OSI license.
 
+The verdict, alternate-minimum test and 68/90 percent region idea are adapted
+from Espaye/aircraft-doppler (MIT, Copyright 2026 Espaye):
+https://github.com/Espaye/aircraft-doppler
+The shared recording-clock offset for two or more flyovers is adapted from
+AlanBacker/audio-flyover-geolocation (MIT, Copyright 2026 AlanBacker):
+https://github.com/AlanBacker/audio-flyover-geolocation
+Those programs are not dependencies and their scripts are not executed.
+Outside the United States the search uses one assumed altitude, not USGS terrain.
+
 Flight positions queried at runtime remain under their providers' terms.
 adsb.aero documents its trajectories as derived from the adsb.lol archive
 under the Open Database License 1.0. This application does not relicense

@@ -108,8 +108,10 @@ document.querySelector("#locate-form").addEventListener("submit", async (event) 
   }
     showLocateMessage("Puntuando celdas. El centro de la zona no se toma como micrófono.");
   try {
+    const ridges = Array.isArray(analysis.ridges) && analysis.ridges.length ? analysis.ridges : [analysis.ridge];
     const found = await postJSON("/api/locate", {
-      ridge: { ...analysis.ridge, status: analysis.status },
+      ridge: { ...ridges[0], status: analysis.status },
+      events: ridges.length > 1 ? ridges.slice(0, 4).map((item) => ({ ...item, status: "accepted" })) : undefined,
       flights: history.flights,
       prior: {
         lat: Number(document.querySelector("#locate-lat").value),
@@ -145,17 +147,60 @@ function showLocateMessage(text) {
 function renderLocation(result) {
   const card = document.createElement("div");
   card.className = "card";
+  const labels = { ok: "Compatible", weak: "Débil", ambiguous: "Ambiguo", failed: "Insuficiente" };
+  const verdict = result.verdict || (result.status === "ambiguous" ? "ambiguous" : "failed");
   const title = document.createElement("h3");
-  title.textContent = "Estado: " + (result.status || "sin estado");
+  title.className = "verdict verdict-" + verdict;
+  title.textContent = "Veredicto: " + (result.verdict_label || labels[verdict] || "Insuficiente");
   const message = document.createElement("p");
-  message.textContent = result.message || "";
+  message.textContent = result.summary || result.message || "";
   const note = document.createElement("p");
-  note.textContent = "Identificación única: no. El centro de búsqueda no es un punto recuperado.";
+  note.textContent = "Ningún punto se muestra como seguro. Identificación única: no. El centro de búsqueda no es un punto recuperado.";
   card.append(title, message, note);
+  const regions = result.regions || {};
+  const band68 = regions["68"] || {};
+  const band90 = regions["90"] || {};
+  const regionText = document.createElement("p");
+  if (band68.radius_m == null && band90.radius_m == null) {
+    regionText.textContent = "No hay región del 68 % ni del 90 %: la evidencia no sostiene una zona.";
+  } else {
+    regionText.textContent = "Región del 68 %: " + Math.round(band68.radius_m) + " m. Región del 90 %: " + Math.round(band90.radius_m) + " m. No están calibradas con grabaciones reales.";
+  }
+  card.append(regionText);
+  if (result.clock && result.clock.shared && result.clock.offset_s != null) {
+    const clock = document.createElement("p");
+    const spread = result.clock.spread_68_s == null ? "" : " La dispersión del 68 % del desfase es " + Number(result.clock.spread_68_s).toFixed(1) + " s.";
+    clock.textContent = "Desfase de reloj común a los eventos: " + Number(result.clock.offset_s).toFixed(1) + " s, con paso de " + Number(result.clock.step_s).toFixed(1) + " s." + spread;
+    card.append(clock);
+  } else {
+    const clock = document.createElement("p");
+    clock.textContent = "Con menos de dos eventos explicados no se separa el lugar del desfase del reloj.";
+    card.append(clock);
+  }
+  if (result.show_point && result.reported_point) {
+    const hypothesis = document.createElement("p");
+    hypothesis.textContent = "Hipótesis marcada: " + Number(result.reported_point.lat).toFixed(4) + ", " + Number(result.reported_point.lon).toFixed(4) + ". No es una coordenada calibrada.";
+    card.append(hypothesis);
+  } else {
+    const hypothesis = document.createElement("p");
+    hypothesis.className = "warn";
+    hypothesis.textContent = "No se marca un punto ganador.";
+    card.append(hypothesis);
+  }
   if (result.resolution_m) {
     const resolution = document.createElement("p");
     resolution.textContent = "Resolución de la rejilla: " + Math.round(result.resolution_m) + " m.";
     card.append(resolution);
+  }
+  const flags = result.flags || [];
+  if (flags.length) {
+    const list = document.createElement("ul");
+    flags.forEach((flag) => {
+      const item = document.createElement("li");
+      item.textContent = flag.message || "";
+      list.append(item);
+    });
+    card.append(list);
   }
   const table = document.createElement("table");
   table.innerHTML = "<tr><th>Hipótesis</th><th>Latitud</th><th>Longitud</th><th>RMSE</th></tr>";
@@ -173,12 +218,13 @@ function renderLocation(result) {
   if (result.csv) card.append(download("hipotesis.csv", result.csv, "text/csv"));
   card.append(download("busqueda.json", JSON.stringify(result, null, 2), "application/json"));
   locateOut.replaceChildren(card);
-  drawSearch(result.hypotheses || []);
+  drawSearch(result);
 }
 
-function drawSearch(hypotheses) {
+function drawSearch(result) {
   const canvas = document.querySelector("#locate-map");
   if (!canvas) return;
+  const hypotheses = (result && result.hypotheses) || [];
   const context = canvas.getContext("2d");
   context.clearRect(0, 0, canvas.width, canvas.height);
   const lat = Number(document.querySelector("#locate-lat").value);
@@ -192,17 +238,48 @@ function drawSearch(hypotheses) {
     canvas.width / 2 + ((pointLon - lon) * kx) / span * (canvas.width * 0.4),
     canvas.height / 2 - ((pointLat - lat) * ky) / span * (canvas.height * 0.4),
   ];
+  const radiusPx = (meters) => (Number(meters) / 1000) / span * canvas.width * 0.4;
   context.strokeStyle = "#314052";
   context.beginPath();
   context.arc(canvas.width / 2, canvas.height / 2, canvas.width * 0.4 * (radius / span), 0, Math.PI * 2);
   context.stroke();
   context.fillStyle = "#8fb4d6";
-  context.fillText("zona de búsqueda", 16, 24);
-  hypotheses.forEach((item, index) => {
+  context.fillText("68 % y 90 %: regiones, no una certeza", 16, 24);
+  const band90 = (result.regions && result.regions["90"]) || {};
+  const band68 = (result.regions && result.regions["68"]) || {};
+  (band90.cells || []).forEach((item) => {
     const [x, y] = project(item.lat, item.lon);
-    context.fillStyle = index === 0 ? "#f0c674" : "#7dcea0";
-    context.fillRect(x - 5, y - 5, 10, 10);
+    context.fillStyle = "rgba(143, 180, 214, 0.9)";
+    context.fillRect(x - 3, y - 3, 6, 6);
   });
+  (band68.cells || []).forEach((item) => {
+    const [x, y] = project(item.lat, item.lon);
+    context.fillStyle = "rgba(240, 198, 116, 0.95)";
+    context.fillRect(x - 3, y - 3, 6, 6);
+  });
+  const center = result.show_point && result.reported_point ? result.reported_point : null;
+  if (center && Number.isFinite(Number(band90.radius_m))) {
+    const [x, y] = project(center.lat, center.lon);
+    context.strokeStyle = "#8fb4d6";
+    context.setLineDash([6, 4]);
+    context.beginPath();
+    context.arc(x, y, radiusPx(band90.radius_m), 0, Math.PI * 2);
+    context.stroke();
+    context.setLineDash([]);
+    context.strokeStyle = "#f0c674";
+    context.beginPath();
+    context.arc(x, y, radiusPx(band68.radius_m), 0, Math.PI * 2);
+    context.stroke();
+    context.fillStyle = "#f4f7fb";
+    context.fillRect(x - 4, y - 4, 8, 8);
+    context.fillText("hipótesis", x + 8, y - 8);
+  } else {
+    hypotheses.forEach((item) => {
+      const [x, y] = project(item.lat, item.lon);
+      context.fillStyle = "#7dcea0";
+      context.fillRect(x - 4, y - 4, 8, 8);
+    });
+  }
 }
 
 document.querySelector("#audio-form").addEventListener("submit", async (event) => {
