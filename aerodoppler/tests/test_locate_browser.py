@@ -60,6 +60,28 @@ def ui(tmp_path_factory):
         server.wait(timeout=5)
 
 
+def test_province_menu_lists_melilla_and_a_warning(ui):
+    ui.reload()
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        if ui.eval("!!document.querySelector('#locate-region option[value=melilla]')"):
+            break
+        time.sleep(0.2)
+    assert ui.eval("!!document.querySelector('#locate-region option[value=melilla]')") is True, ui.eval("JSON.stringify(window.__errors)")
+    assert ui.eval("!!document.querySelector('#locate-region option[value=badajoz]')") is True
+    assert "Si el audio se grabó fuera" in ui.eval("document.body.innerText")
+    ui.eval("document.querySelector('#locate-region').value = 'melilla'; document.querySelector('#locate-region').dispatchEvent(new Event('change'))")
+    deadline = time.time() + 8
+    text = ""
+    while time.time() < deadline:
+        text = ui.eval("document.querySelector('#locate-fit').textContent") or ""
+        if "Cabe en este servicio" in text:
+            break
+        time.sleep(0.2)
+    assert "Cabe en este servicio" in text
+    assert "Melilla" in text
+
+
 def test_locate_form_does_not_ask_for_a_place(ui):
     ui.reload()
     assert ui.eval("document.querySelector('#locate-lat')") is None
@@ -267,7 +289,7 @@ class Browser:
     async def _loaded(self):
         for _ in range(40):
             result = await self._call("Runtime.evaluate", {
-                "expression": "document.querySelector('#locate-submit') ? 'ready' : ''",
+                "expression": "document.querySelector('#locate-submit') && window.__appReady ? 'ready' : ''",
                 "returnByValue": True,
             })
             if result.get("result", {}).get("value") == "ready":

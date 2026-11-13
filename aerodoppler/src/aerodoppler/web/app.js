@@ -1,3 +1,5 @@
+window.__errors = [];
+window.addEventListener("error", (event) => { window.__errors.push(String(event.message)); });
 const state = { analysis: null, history: null, location: null };
 const locateOut = document.querySelector("#locate-out");
 const audioOut = document.querySelector("#audio-out");
@@ -98,14 +100,14 @@ document.querySelector("#locate-form").addEventListener("submit", async (event) 
     const payload = {
       ridge: { ...ridges[0], status: analysis.status },
       events: ridges.length > 1 ? ridges.slice(0, 4).map((item) => ({ ...item, status: "accepted" })) : undefined,
-      region: document.querySelector("#locate-region").value || "unsure",
+      region: currentRegionSpec(),
       recording_start_local: document.querySelector("#locate-when").value,
       uncertainty_h: uncertainty,
     };
     if (altitude !== "") payload.altitude_m = altitude;
     const found = await postJSON("/api/locate", payload);
-    state.location = found;
-    renderLocation(found);
+    state.location = found.job_id ? await pollLocateJob(found.job_id) : found;
+    renderLocation(state.location);
   } catch (error) {
     showLocateMessage(error.message || "No se pudo completar la búsqueda.");
   }
@@ -232,6 +234,12 @@ function renderLocation(result) {
   const note = document.createElement("p");
   note.textContent = "Ningún punto se muestra como seguro. Identificación única: no. El centro de búsqueda no es un punto recuperado.";
   card.append(title, message, note);
+  if (result.coverage_note) {
+    const limit = document.createElement("p");
+    limit.className = "warn";
+    limit.textContent = result.coverage_note;
+    card.append(limit);
+  }
   if (result.plan) {
     const cost = document.createElement("p");
     cost.textContent = result.plan.tile_count + " teselas de " + result.plan.tile_radius_km + " km, " + result.plan.queries + " consultas a adsb.aero en el peor caso, cota de red " + Math.round(result.plan.time_bound_s) + " s. " + (result.plan.time_note || "");
@@ -385,6 +393,139 @@ function drawSearch(result) {
     });
   }
 }
+
+const extraIds = [];
+let regionCatalog = null;
+
+function currentRegionSpec() {
+  const base = document.querySelector("#locate-region").value || "unsure";
+  if (!extraIds.length || base === "unsure" || base === "iberia" || String(base).startsWith("cc:")) return base;
+  return [base, ...extraIds].join(",");
+}
+
+async function loadRegions() {
+  let response;
+  try {
+    response = await fetch("/api/regions", { credentials: "same-origin", headers: { "Accept": "application/json" } });
+  } catch (error) {
+    window.__errors.push(String(error));
+    return;
+  }
+  if (!response.ok) {
+    window.__errors.push("regions " + response.status);
+    return;
+  }
+  regionCatalog = await response.json();
+  const select = document.querySelector("#locate-region");
+  regionCatalog.groups.forEach((group) => {
+    const box = document.createElement("optgroup");
+    box.label = group.name;
+    group.items.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = item.name;
+      box.append(option);
+    });
+    select.append(box);
+  });
+  select.addEventListener("change", () => {
+    extraIds.splice(0, extraIds.length);
+    refreshRegionPlan();
+  });
+  document.querySelector("#locate-extra").addEventListener("change", () => {
+    const value = document.querySelector("#locate-extra").value;
+    if (value && !extraIds.includes(value)) extraIds.push(value);
+    document.querySelector("#locate-extra").value = "";
+    refreshRegionPlan();
+  });
+  refreshRegionPlan();
+}
+
+async function refreshRegionPlan() {
+  const spec = currentRegionSpec();
+  const response = await fetch("/api/region-plan?region=" + encodeURIComponent(spec), { credentials: "same-origin", headers: { "Accept": "application/json" } });
+  if (!response.ok) return;
+  const plan = await response.json();
+  const note = document.querySelector("#locate-fit");
+  const verb = plan.fits_free_web
+    ? "Cabe en este servicio: " + plan.tile_count + " tesela, " + plan.queries + " llamadas, hasta " + Math.round(plan.search_bound_s) + " s. Se buscará solo en " + plan.label + "."
+    : "No cabe en este servicio: " + plan.tile_count + " teselas, " + plan.queries + " llamadas, hasta " + Math.round(plan.search_bound_s) + " s. No se buscará solo una parte: hará falta el modo local.";
+  note.textContent = verb;
+  fillExtraProvinces(spec);
+  const chosen = document.querySelector("#locate-chosen");
+  chosen.replaceChildren();
+  extraIds.forEach((id) => {
+    const item = document.createElement("li");
+    item.textContent = provinceName(id) + " ";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = "Quitar";
+    button.addEventListener("click", () => {
+      const index = extraIds.indexOf(id);
+      if (index >= 0) extraIds.splice(index, 1);
+      refreshRegionPlan();
+    });
+    item.append(button);
+    chosen.append(item);
+  });
+  drawSearch({ map: plan.map, plan: { tiles: plan.tiles }, hypotheses: [], show_point: false, regions: {} });
+}
+
+function fillExtraProvinces(spec) {
+  const extra = document.querySelector("#locate-extra");
+  extra.replaceChildren();
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "Ninguna más";
+  extra.append(blank);
+  const base = document.querySelector("#locate-region").value;
+  if (!regionCatalog || !base || base === "unsure" || base === "iberia" || String(base).startsWith("cc:")) return;
+  const selected = new Set([base, ...extraIds]);
+  const neighborIds = new Set();
+  selected.forEach((id) => {
+    const item = findProvince(id);
+    (item && item.neighbors || []).forEach((neighbor) => {
+      if (!selected.has(neighbor)) neighborIds.add(neighbor);
+    });
+  });
+  neighborIds.forEach((id) => {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = provinceName(id);
+    extra.append(option);
+  });
+}
+
+function findProvince(id) {
+  if (!regionCatalog) return null;
+  for (const group of regionCatalog.groups) {
+    for (const item of group.items) {
+      if (item.id === id) return item;
+    }
+  }
+  return null;
+}
+
+function provinceName(id) {
+  const item = findProvince(id);
+  return item ? item.name : id;
+}
+
+async function pollLocateJob(jobId) {
+  for (let attempt = 0; attempt < 140; attempt += 1) {
+    const response = await fetchLimited("/api/locate-jobs/" + jobId, { credentials: "same-origin", headers: { "Accept": "application/json" } });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.message || "No se pudo seguir la búsqueda.");
+    if (body.state === "done") return body.result;
+    showLocateMessage((body.phase || "Buscando en la zona elegida.") + " " + (body.tiles_done || 0) + "/" + (body.tiles_total || 1));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error("La búsqueda sigue en curso más de lo previsto. No se muestra un resultado parcial.");
+}
+
+loadRegions();
+window.__appReady = true;
 
 document.querySelector("#audio-form").addEventListener("submit", async (event) => {
   event.preventDefault();

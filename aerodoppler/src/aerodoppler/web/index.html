@@ -26,9 +26,14 @@
         <label for="locate-region">Pista regional, opcional</label>
         <select id="locate-region">
           <option value="unsure" selected>No sé. Por defecto, España peninsular y Baleares</option>
-          <option value="iberia">España peninsular y Baleares</option>
         </select>
-        <p class="fine">Puedes dejar «no sé». No pide coordenadas.</p>
+        <label for="locate-extra">Añadir provincia contigua, opcional</label>
+        <select id="locate-extra">
+          <option value="">Ninguna más</option>
+        </select>
+        <ul id="locate-chosen"></ul>
+        <p id="locate-fit" class="fine"></p>
+        <p class="warn">La provincia limita dónde se busca. Si el audio se grabó fuera de esa zona, el resultado será insuficiente o erróneo. Puedes dejar «no sé».</p>
         <details>
           <summary>Altitud supuesta, opcional</summary>
           <label for="locate-alt">Metros en toda la zona. Si lo dejas vacío, se suponen 600</label>
@@ -109,7 +114,7 @@
       <div id="compare-out"></div>
     </section>
 
-    <p class="fine">Software de este repositorio: PolyForm Noncommercial 1.0.0. Required Notice: Copyright 2026 Cinna Davis. Datos de vuelo ODbL vía adsb.lol / adsb.aero, con cobertura desconocida. <a href="/license.txt">Licencia</a>. <button class="secondary" id="logout" type="button">Salir</button></p>
+    <p class="fine">Software de este repositorio: PolyForm Noncommercial 1.0.0. Required Notice: Copyright 2026 Cinna Davis. Límites provinciales © Eurostat / GISCO, NUTS 2024, simplificados. Datos de vuelo ODbL vía adsb.lol / adsb.aero, con cobertura desconocida. <a href="/license.txt">Licencia</a>. <button class="secondary" id="logout" type="button">Salir</button></p>
   </main>
   <script src="/static/app.js"></script>
 </body>

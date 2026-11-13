@@ -54,7 +54,7 @@ blueprint sobre el servicio v13.
 PYTHONPATH=aerodoppler/src pytest -q aerodoppler/tests
 ```
 
-42 pruebas pasaron y 1 se omitió porque la grabación privada no está montada.
+47 pruebas pasaron y 1 se omitió porque la grabación privada no está montada.
 En sintético, con la misma física del buscador, un centro de búsqueda a 2,5 km al
 norte y 2,0 km al este del micrófono, y una rejilla de 1,5 km afinada a 375 m:
 tres pasadas que se cruzan y reloj conocido dieron veredicto compatible, error
@@ -65,7 +65,10 @@ reloj fuera de la ventana quedó insuficiente, sin región. Es consistencia
 interna, no una precisión sobre grabaciones reales. El área por defecto, sin
 pista regional, son 21 teselas de 110 km: 84 llamadas a adsb.aero en el peor
 caso y una cota de 2100 s de red. El servicio gratuito no las ejecuta. Esa
-cifra no es un error de localización.
+cifra no es un error de localización. Una provincia o una comunidad cabe en la
+web solo si un círculo de 110 km cubre su polígono: 4 llamadas y hasta 112 s.
+Badajoz, Cáceres, Ciudad Real, Toledo, Zaragoza, Baleares, Las Palmas, Santa
+Cruz de Tenerife y las comunidades de más de un círculo quedan en el modo local.
 
 Pendiente, y no sustituible por esta VM: Safari en un iPhone real (botones,
 selector de archivos y subida) y el despliegue real en Render con sus registros.

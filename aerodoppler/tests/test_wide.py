@@ -4,13 +4,14 @@ import importlib.util
 import json
 import subprocess
 import sys
+import time
 
 from fastapi.testclient import TestClient
 
 from aerodoppler.app import create_app
 from aerodoppler.config import Settings
 from aerodoppler.regions import PLACES, region_tiles, resolve_region
-from aerodoppler.wide_search import filter_flights, free_tier_response, run_local_tiles, score_tile
+from aerodoppler.wide_search import filter_flights, free_tier_response, plan_cost, run_local_tiles, score_tile
 
 
 def _settings():
@@ -129,6 +130,145 @@ def test_a_stopped_local_sweep_does_not_query():
     assert report["archive_download"] is False
 
 
+def test_melilla_fits_one_circle_and_badajoz_does_not():
+    from aerodoppler.provinces import _km, _samples, cover_selection, neighbors_of, province_record
+
+    small = plan_cost("melilla", _settings())
+    assert small["fits_free_web"] is True
+    assert small["tile_count"] == 1
+    assert small["queries"] == 4
+    assert small["search_bound_s"] <= 120
+    samples = _samples(province_record("melilla")["rings"])
+    assert len(samples) > 1
+    tile = small["tiles"][0]
+    assert all(_km(tile["lat"], tile["lon"], lat, lon) <= 110.01 for lon, lat in samples)
+
+    large = plan_cost("badajoz", _settings())
+    assert large["fits_free_web"] is False
+    assert large["tile_count"] >= 2
+    assert large["search_bound_s"] > 120
+    centroid_lat = sum(lat for _lon, lat in _samples(province_record("badajoz")["rings"])) / large["samples"]
+    centroid_lon = sum(lon for lon, _lat in _samples(province_record("badajoz")["rings"])) / large["samples"]
+    farthest = max(_km(centroid_lat, centroid_lon, lat, lon) for lon, lat in _samples(province_record("badajoz")["rings"]))
+    assert farthest > 110
+    assert all(
+        min(_km(tile["lat"], tile["lon"], lat, lon) for tile in large["tiles"]) <= 110.01
+        for lon, lat in _samples(province_record("badajoz")["rings"])
+    )
+    assert "toledo" in neighbors_of("madrid")
+    assert "barcelona" not in neighbors_of("madrid")
+
+
+def test_contiguous_provinces_are_planned_together_and_do_not_partially_run():
+    pair = plan_cost("madrid,toledo", _settings())
+    assert pair["tile_count"] >= 2
+    assert pair["fits_free_web"] is False
+    assert "Madrid" in pair["label"] and "Toledo" in pair["label"]
+    basque = plan_cost("cc:PV", _settings())
+    assert basque["tile_count"] == 1
+    assert basque["fits_free_web"] is True
+    try:
+        plan_cost("madrid,barcelona", _settings())
+    except ValueError as error:
+        assert "contiguo" in str(error)
+    else:
+        raise AssertionError("madrid y barcelona no son contiguas")
+    client = TestClient(create_app(_settings()))
+    refused = client.post(
+        "/api/locate",
+        json={"region": "badajoz", "recording_start_local": "2026-11-07T23:00", "uncertainty_h": 1},
+        headers={"Authorization": "Bearer " + ("x" * 24)},
+    )
+    assert refused.status_code == 200
+    body = refused.json()
+    assert body["mode"] == "wide_area_refused"
+    assert body["job_id"] if False else "job_id" not in body
+    assert body["plan"]["executed"] if False else body["show_point"] is False
+
+
+def test_a_fitting_province_runs_the_whole_circle_and_not_a_partial_list():
+    from datetime import datetime, timezone
+
+    from aerodoppler.wide_search import execute_covered_plan
+
+    plan = plan_cost("melilla", _settings())
+    opener = _Opener({
+        "/data-range": {"first_date": "2025-05-05", "last_date": "2026-11-08"},
+        "/query": {"flights": [], "cursor": None},
+    })
+    found = execute_covered_plan(
+        plan,
+        datetime(2026, 11, 7, 22, tzinfo=timezone.utc),
+        datetime(2026, 11, 7, 23, tzinfo=timezone.utc),
+        _settings(),
+        {"status": "accepted", "time_s": [0, 1, 2, 3, 4, 5, 6, 7], "frequency_hz": [180] * 8},
+        datetime(2026, 11, 7, 22, 30, tzinfo=timezone.utc).timestamp(),
+        1800.0,
+        600.0,
+        opener,
+    )
+    assert found["executed"] is True
+    assert found["verdict"] == "failed"
+    assert found["show_point"] is False
+    assert found["point_is_certain"] is False
+    assert sum("/query" in url for url in opener.urls) == 1
+    clipped = _Opener({
+        "/data-range": {"first_date": "2025-05-05", "last_date": "2026-11-08"},
+        "/query": {"flights": [{"flight_id": "x", "icao24": "abc123", "icao_type": "C172", "path": {"coordinates": [[[-2.9, 35.3, 1000]]]}, "timestamps": [[1_700_000_000]], "alt_correction_ft": []}], "cursor": "more"},
+    })
+    stopped = execute_covered_plan(
+        plan,
+        datetime(2026, 11, 7, 22, tzinfo=timezone.utc),
+        datetime(2026, 11, 7, 23, tzinfo=timezone.utc),
+        _settings(),
+        {"status": "accepted", "time_s": [0, 1, 2, 3, 4, 5, 6, 7], "frequency_hz": [180] * 8},
+        datetime(2026, 11, 7, 22, 30, tzinfo=timezone.utc).timestamp(),
+        0.0,
+        None,
+        clipped,
+    )
+    assert stopped["status"] == "incomplete"
+    assert stopped["show_point"] is False
+    assert stopped["hypotheses"] == []
+
+
+def test_fitting_province_job_finishes_without_a_network(monkeypatch):
+    def fake(*_args, **_kwargs):
+        return {"status": "no_matches", "flights": [], "truncated": False, "message": "sin vuelos"}
+
+    monkeypatch.setattr("aerodoppler.history.query_history", fake)
+    client = TestClient(create_app(_settings()))
+    started = client.post(
+        "/api/locate",
+        json={
+            "region": "melilla",
+            "recording_start_local": "2026-11-07T23:00",
+            "uncertainty_h": 1,
+            "ridge": {"status": "accepted", "time_s": [0, 1, 2, 3, 4, 5, 6, 7], "frequency_hz": [180] * 8},
+        },
+        headers={"Authorization": "Bearer " + ("x" * 24)},
+    )
+    assert started.status_code == 200
+    body = started.json()
+    assert body["mode"] == "province_search"
+    assert body["job_id"]
+    deadline = time.time() + 8
+    result = None
+    while time.time() < deadline:
+        polled = client.get("/api/locate-jobs/" + body["job_id"], headers={"Authorization": "Bearer " + ("x" * 24)})
+        assert polled.status_code == 200
+        payload = polled.json()
+        if payload["state"] == "done":
+            result = payload["result"]
+            break
+        time.sleep(0.05)
+    assert result is not None
+    assert result["verdict"] == "failed"
+    assert result["show_point"] is False
+    assert result["point_is_certain"] is False
+    assert result["executed"] is True
+
+
 def test_plan_command_prints_the_cost_without_a_token():
     completed = subprocess.run(
         [sys.executable, "-m", "aerodoppler.wide_search", "--plan"],
@@ -143,6 +283,45 @@ def test_plan_command_prints_the_cost_without_a_token():
     assert body["archive_download"] is False
     assert body["tile_count"] == region_tiles(None)["tile_count"]
     assert body["queries"] == body["tile_count"] * 4
+    province = subprocess.run(
+        [sys.executable, "-m", "aerodoppler.wide_search", "--plan", "--provincia", "melilla"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd="/workspace",
+        env={"PYTHONPATH": "/workspace/aerodoppler/src", "PATH": "/usr/bin"},
+    )
+    melilla = json.loads(province.stdout)
+    assert melilla["fits_free_web"] is True
+    assert melilla["tile_count"] == 1
+
+
+class _Opener:
+    def __init__(self, routes):
+        self.routes = routes
+        self.urls = []
+
+    def __call__(self, request, timeout=None):
+        self.urls.append(request.full_url)
+        for fragment, payload in self.routes.items():
+            if fragment in request.full_url:
+                return _Response(payload)
+        raise AssertionError(request.full_url)
+
+
+class _Response:
+    def __init__(self, payload):
+        self._body = json.dumps(payload).encode()
+        self.headers = {}
+
+    def read(self, limit):
+        return self._body[:limit]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
 
 
 def _uncertainty():
