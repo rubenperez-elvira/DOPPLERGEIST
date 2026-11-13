@@ -22,6 +22,7 @@ from .audio_engine import AudioRejected, analyze_samples, decode_audio, ridge_cs
 from .auth import COOKIE, LoginLimiter, origin_allowed, request_authorized, session_value, token_matches, unauthorized
 from .compare import compare_csv, compare_tracks
 from .inverse import hypotheses_csv, locate_microphone
+from .wide_search import free_tier_response
 from .config import Settings, load_settings
 from .history import PROVIDERS, flights_csv, query_history, query_live_adsb_lol
 
@@ -265,6 +266,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _error(400, "json", "La búsqueda tiene que ser un objeto.")
         try:
             prior = dict(payload.get("prior") or {})
+            has_prior = prior.get("lat") not in (None, "") and prior.get("lon") not in (None, "")
+            if payload.get("region") is not None or not has_prior:
+                uncertainty_h = payload.get("uncertainty_h")
+                if uncertainty_h in (None, "") and payload.get("uncertainty_min") not in (None, ""):
+                    uncertainty_h = float(payload["uncertainty_min"]) / 60.0
+                result = free_tier_response(
+                    "unsure" if payload.get("region") in (None, "") else payload.get("region"),
+                    settings,
+                    None if uncertainty_h in (None, "") else float(uncertainty_h),
+                )
+                result["csv"] = hypotheses_csv(result)
+                result["stored"] = False
+                result["mode"] = "wide_area_refused"
+                return result
             result = await asyncio.wait_for(asyncio.to_thread(
                 locate_microphone,
                 payload.get("ridge"),
