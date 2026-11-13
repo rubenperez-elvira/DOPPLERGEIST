@@ -1,0 +1,32 @@
+Required Notice: Copyright 2026 Cinna Davis
+
+AeroDoppler v14 Cloud is a noncommercial adaptation in the
+rubenperez-elvira/DOPPLERGEIST fork of
+https://github.com/1337isnot1337/DOPPLERGEIST
+The software in this repository is distributed under the PolyForm
+Noncommercial License 1.0.0. See LICENSE. It is source-available.
+GitHub classifies that license as Other / source-available, not as a
+permissive OSI license.
+
+The verdict, alternate-minimum test and 68/90 percent region idea are adapted
+from Espaye/aircraft-doppler (MIT, Copyright 2026 Espaye):
+https://github.com/Espaye/aircraft-doppler
+The shared recording-clock offset for two or more flyovers is adapted from
+AlanBacker/audio-flyover-geolocation (MIT, Copyright 2026 AlanBacker):
+https://github.com/AlanBacker/audio-flyover-geolocation
+Those programs are not dependencies and their scripts are not executed.
+Outside the United States the search uses one assumed altitude, not USGS terrain.
+
+Provincial outlines embedded in aerodoppler/src/aerodoppler/data/provinces.json
+are derived from Eurostat GISCO NUTS 2024 at 1:20 000 000 (EPSG:4326).
+Eurostat's reuse policy allows free reuse, including commercial reuse, if the
+source is cited and modifications are stated. © European Union, 1995–2026.
+Source: https://ec.europa.eu/eurostat/web/gisco/geodata/statistical-units/territorial-units-statistics
+The NUTS 3 units of the Balearic Islands were unioned into one province, and
+the Canary Island units into Las Palmas and Santa Cruz de Tenerife. Coordinates
+were rounded to 3 decimals and interior rings were dropped.
+
+Flight positions queried at runtime remain under their providers' terms.
+adsb.aero documents its trajectories as derived from the adsb.lol archive
+under the Open Database License 1.0. This application does not relicense
+those positions.
