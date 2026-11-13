@@ -17,6 +17,15 @@ https://github.com/AlanBacker/audio-flyover-geolocation
 Those programs are not dependencies and their scripts are not executed.
 Outside the United States the search uses one assumed altitude, not USGS terrain.
 
+Provincial outlines embedded in aerodoppler/src/aerodoppler/data/provinces.json
+are derived from Eurostat GISCO NUTS 2024 at 1:20 000 000 (EPSG:4326).
+Eurostat's reuse policy allows free reuse, including commercial reuse, if the
+source is cited and modifications are stated. © European Union, 1995–2026.
+Source: https://ec.europa.eu/eurostat/web/gisco/geodata/statistical-units/territorial-units-statistics
+The NUTS 3 units of the Balearic Islands were unioned into one province, and
+the Canary Island units into Las Palmas and Santa Cruz de Tenerife. Coordinates
+were rounded to 3 decimals and interior rings were dropped.
+
 Flight positions queried at runtime remain under their providers' terms.
 adsb.aero documents its trajectories as derived from the adsb.lol archive
 under the Open Database License 1.0. This application does not relicense

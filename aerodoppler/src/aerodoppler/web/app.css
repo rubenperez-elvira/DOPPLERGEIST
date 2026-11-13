@@ -54,6 +54,8 @@ button.secondary { background: transparent; color: var(--ink); }
 .verdict-failed { color: var(--bad); }
 .warn { color: var(--warn); }
 .fine, .fine a { color: var(--muted); font-size: .9rem; }
+details { margin-top: .8rem; }
+summary { cursor: pointer; font-weight: 650; }
 img, canvas { width: 100%; height: auto; border-radius: 12px; background: #070b10; }
 table { width: 100%; border-collapse: collapse; font-size: .92rem; }
 th, td { text-align: left; padding: .35rem; border-bottom: 1px solid var(--line); vertical-align: top; }

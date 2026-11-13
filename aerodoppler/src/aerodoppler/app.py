@@ -6,7 +6,9 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -22,6 +24,7 @@ from .audio_engine import AudioRejected, analyze_samples, decode_audio, ridge_cs
 from .auth import COOKIE, LoginLimiter, origin_allowed, request_authorized, session_value, token_matches, unauthorized
 from .compare import compare_csv, compare_tracks
 from .inverse import hypotheses_csv, locate_microphone
+from .wide_search import execute_covered_plan, free_tier_response, plan_cost, region_menu
 from .config import Settings, load_settings
 from .history import PROVIDERS, flights_csv, query_history, query_live_adsb_lol
 
@@ -38,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="AeroDoppler v14", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
+    jobs: dict[str, dict] = {}
 
     @app.middleware("http")
     async def headers(request: Request, call_next):
@@ -118,6 +122,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if blocked:
             return blocked
         return {"providers": PROVIDERS, "default": "adsb_aero"}
+
+    @app.get("/api/regions")
+    def regions(request: Request):
+        blocked = _guard(request, settings)
+        if blocked:
+            return blocked
+        return region_menu(settings)
+
+    @app.get("/api/region-plan")
+    def region_plan(request: Request, region: str = "unsure"):
+        blocked = _guard(request, settings)
+        if blocked:
+            return blocked
+        try:
+            plan = plan_cost(region, settings)
+        except ValueError as error:
+            return _error(422, "region", str(error))
+        return {
+            "id": plan.get("id"),
+            "label": plan.get("label"),
+            "why": plan.get("why"),
+            "tile_count": plan["tile_count"],
+            "queries": plan["queries"],
+            "time_bound_s": plan["time_bound_s"],
+            "search_bound_s": plan["search_bound_s"],
+            "fits_free_web": plan["fits_free_web"],
+            "tiles": plan["tiles"],
+            "map": plan["map"],
+            "queries_note": plan["queries_note"],
+            "time_note": plan["time_note"],
+        }
 
     @app.post("/api/analyze")
     async def analyze(request: Request, file: UploadFile = File(...)):
@@ -265,6 +300,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _error(400, "json", "La búsqueda tiene que ser un objeto.")
         try:
             prior = dict(payload.get("prior") or {})
+            has_prior = prior.get("lat") not in (None, "") and prior.get("lon") not in (None, "")
+            if payload.get("region") is not None or not has_prior:
+                spec = "unsure" if payload.get("region") in (None, "") else str(payload.get("region"))
+                uncertainty_h = payload.get("uncertainty_h")
+                if uncertainty_h in (None, "") and payload.get("uncertainty_min") not in (None, ""):
+                    uncertainty_h = float(payload["uncertainty_min"]) / 60.0
+                hours = None if uncertainty_h in (None, "") else float(uncertainty_h)
+                plan = plan_cost(spec, settings)
+                if not plan["fits_free_web"]:
+                    result = free_tier_response(spec, settings, hours)
+                    result["csv"] = hypotheses_csv(result)
+                    result["stored"] = False
+                    result["mode"] = "wide_area_refused"
+                    return result
+                return await _start_province_job(jobs, analysis_slots, settings, payload, plan, hours)
             result = await asyncio.wait_for(asyncio.to_thread(
                 locate_microphone,
                 payload.get("ridge"),
@@ -284,6 +334,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         result["stored"] = False
         result["mode"] = "inverse_search"
         return result
+
+    @app.get("/api/locate-jobs/{job_id}")
+    async def locate_job(request: Request, job_id: str):
+        blocked = _guard(request, settings)
+        if blocked:
+            return blocked
+        job = jobs.get(job_id)
+        if job is None:
+            return _error(404, "busqueda", "Esa búsqueda no está en memoria.")
+        payload = {
+            "job_id": job_id,
+            "state": job["state"],
+            "phase": job.get("phase"),
+            "tiles_done": job.get("tiles_done", 0),
+            "tiles_total": job.get("tiles_total", 0),
+        }
+        if job["state"] == "done":
+            payload["result"] = job.get("result")
+        return payload
 
     @app.exception_handler(Exception)
     async def unexpected(_request: Request, _exc: Exception):
@@ -392,6 +461,88 @@ def _elevation(lat: float, lon: float) -> float:
     if not -500 <= value <= 9000:
         raise ValueError("elevación fuera de rango")
     return value
+
+
+async def _start_province_job(jobs, slot, settings, payload, plan, hours):
+    if payload.get("recording_start_local"):
+        center = _parse_local(str(payload["recording_start_local"]))
+    elif payload.get("recording_start_unix") not in (None, ""):
+        center = datetime.fromtimestamp(float(payload["recording_start_unix"]), timezone.utc)
+    else:
+        raise ValueError("Falta la fecha y hora aproximada.")
+    half = timedelta(hours=0.0 if hours is None else abs(float(hours)))
+    start, end = center - half, center + half
+    if (end - start).total_seconds() / 60.0 > settings.max_window_min:
+        raise ValueError(f"La ventana no cabe: el máximo es {settings.max_window_min:.0f} min.")
+    altitude = None if payload.get("altitude_m") in (None, "") else float(payload["altitude_m"])
+    events = _events_or_none(payload.get("events"))
+    if not await _acquire(slot):
+        return _busy()
+    now = time.monotonic()
+    for old_id, old in list(jobs.items()):
+        if old.get("state") == "done" and now - old.get("created", now) > 600:
+            jobs.pop(old_id, None)
+    job_id = secrets.token_hex(8)
+    job = {
+        "state": "running",
+        "phase": "Preparando la búsqueda en la zona elegida.",
+        "tiles_done": 0,
+        "tiles_total": plan["tile_count"],
+        "created": now,
+    }
+    jobs[job_id] = job
+    asyncio.create_task(_run_province_job(
+        job, slot, settings, plan, start, end, payload.get("ridge"), center.timestamp(), half.total_seconds(), altitude, events,
+    ))
+    return {
+        "job_id": job_id,
+        "state": "running",
+        "mode": "province_search",
+        "phase": job["phase"],
+        "tiles_done": 0,
+        "tiles_total": plan["tile_count"],
+        "label": plan.get("label"),
+        "map": plan.get("map"),
+        "plan": {
+            "tile_count": plan["tile_count"],
+            "queries": plan["queries"],
+            "search_bound_s": plan["search_bound_s"],
+            "fits_free_web": True,
+            "tiles": plan["tiles"],
+        },
+        "coverage_note": plan.get("why"),
+    }
+
+
+async def _run_province_job(job, slot, settings, plan, start, end, ridge, recording_unix, uncertainty_s, altitude, events):
+    try:
+        def progress(phase, done):
+            job["phase"] = phase
+            job["tiles_done"] = done
+
+        result = await asyncio.to_thread(
+            execute_covered_plan, plan, start, end, settings, ridge, recording_unix, uncertainty_s, altitude, urlopen, events, progress,
+        )
+        result["csv"] = hypotheses_csv(result)
+        result["stored"] = False
+        result["mode"] = "province_search"
+        job["result"] = result
+    except Exception:
+        log.exception("búsqueda provincial fallida")
+        job["result"] = {
+            "status": "incomplete",
+            "verdict": "failed",
+            "verdict_label": "Insuficiente",
+            "summary": "La búsqueda de la zona no terminó. No se publica una posición.",
+            "message": "La búsqueda de la zona no terminó. No se publica una posición.",
+            "show_point": False,
+            "reported_point": None,
+            "point_is_certain": False,
+            "hypotheses": [],
+        }
+    finally:
+        job["state"] = "done"
+        slot.release()
 
 
 def _events_or_none(events):

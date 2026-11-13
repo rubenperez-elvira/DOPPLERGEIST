@@ -60,6 +60,49 @@ def ui(tmp_path_factory):
         server.wait(timeout=5)
 
 
+def test_province_menu_lists_melilla_and_a_warning(ui):
+    ui.reload()
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        if ui.eval("!!document.querySelector('#locate-region option[value=melilla]')"):
+            break
+        time.sleep(0.2)
+    assert ui.eval("!!document.querySelector('#locate-region option[value=melilla]')") is True, ui.eval("JSON.stringify(window.__errors)")
+    assert ui.eval("!!document.querySelector('#locate-region option[value=badajoz]')") is True
+    assert "Si el audio se grabó fuera" in ui.eval("document.body.innerText")
+    ui.eval("document.querySelector('#locate-region').value = 'melilla'; document.querySelector('#locate-region').dispatchEvent(new Event('change'))")
+    deadline = time.time() + 8
+    text = ""
+    while time.time() < deadline:
+        text = ui.eval("document.querySelector('#locate-fit').textContent") or ""
+        if "Cabe en este servicio" in text:
+            break
+        time.sleep(0.2)
+    assert "Cabe en este servicio" in text
+    assert "Melilla" in text
+
+
+def test_locate_form_does_not_ask_for_a_place(ui):
+    ui.reload()
+    assert ui.eval("document.querySelector('#locate-lat')") is None
+    assert ui.eval("document.querySelector('#locate-region').value") == "unsure"
+    assert "opcional" in ui.eval("document.querySelector('label[for=locate-region]').textContent")
+    assert "Averiguar dónde se grabó" in ui.text("h1")
+    const_bytes = """
+      const text = "2026-11-07T23:24";
+      const payload = 1 + text.length;
+      const bytes = new Uint8Array(10 + 10 + payload);
+      bytes.set([0x49,0x44,0x33,3,0,0,0,0,0,0]);
+      bytes.set([0x54,0x44,0x52,0x43, 0,0,0,payload, 0,0, 0], 10);
+      for (let i = 0; i < text.length; i++) bytes[21 + i] = text.charCodeAt(i);
+      clipClockFromBuffer(bytes);
+    """
+    found = ui.eval(const_bytes)
+    assert found["localValue"] == "2026-11-07T23:24"
+    assert "ID3" in found["note"]
+    assert "modificación" not in found["note"]
+
+
 def test_empty_click_shows_what_is_missing(ui):
     ui.reload()
     ui.click("#locate-submit")
@@ -246,7 +289,7 @@ class Browser:
     async def _loaded(self):
         for _ in range(40):
             result = await self._call("Runtime.evaluate", {
-                "expression": "document.querySelector('#locate-submit') ? 'ready' : ''",
+                "expression": "document.querySelector('#locate-submit') && window.__appReady ? 'ready' : ''",
                 "returnByValue": True,
             })
             if result.get("result", {}).get("value") == "ready":

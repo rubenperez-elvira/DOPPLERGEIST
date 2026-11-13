@@ -65,7 +65,7 @@ def load_settings() -> Settings:
         max_duration_s=_float("AERDOPPLER_MAX_DURATION_S", 90.0, DURATION_HARD_S, 5.0),
         sample_rate=16000,
         max_radius_km=_float("AERDOPPLER_MAX_RADIUS_KM", 120.0, RADIUS_HARD_KM, 1.0),
-        max_window_min=_float("AERDOPPLER_MAX_WINDOW_MIN", 180.0, WINDOW_HARD_MIN, 1.0),
+        max_window_min=_float("AERDOPPLER_MAX_WINDOW_MIN", 360.0, WINDOW_HARD_MIN, 1.0),
         ffmpeg_timeout_s=_float("AERDOPPLER_FFMPEG_TIMEOUT_S", 25.0, 60.0, 5.0),
         history_timeout_s=_float("AERDOPPLER_HISTORY_TIMEOUT_S", 25.0, 40.0, 5.0),
         max_history_pages=_int("AERDOPPLER_MAX_HISTORY_PAGES", 3, 6, 1),

@@ -84,8 +84,8 @@ def locate_microphone(ridge, flights, prior, recording_start_unix, uncertainty_s
         start = float(recording_start_unix)
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("La zona de búsqueda o el reloj no son válidos.") from error
-    if not (-90 <= lat <= 90 and -180 <= lon <= 180 and 1000 <= radius_m <= 40000):
-        raise ValueError("La zona de búsqueda admite de 1 a 40 km de radio.")
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180 and 1000 <= radius_m <= 120000):
+        raise ValueError("La zona de búsqueda admite de 1 a 120 km de radio.")
     if not 0 <= uncertainty_s <= 3600:
         raise ValueError("La incertidumbre del reloj admite de 0 a 60 min.")
     eligible, excluded = _split_flights(flights or [])

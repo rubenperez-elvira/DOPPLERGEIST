@@ -1,3 +1,5 @@
+window.__errors = [];
+window.addEventListener("error", (event) => { window.__errors.push(String(event.message)); });
 const state = { analysis: null, history: null, location: null };
 const locateOut = document.querySelector("#locate-out");
 const audioOut = document.querySelector("#audio-out");
@@ -38,26 +40,37 @@ function download(filename, text, type) {
   return link;
 }
 
+document.querySelector("#locate-audio").addEventListener("change", async () => {
+  const file = document.querySelector("#locate-audio").files[0];
+  const note = document.querySelector("#locate-clock-note");
+  if (!file) return;
+  const found = await clipClockFromFile(file);
+  if (!found) {
+    note.textContent = "El archivo no trae una hora de grabación. Indica una ventana aproximada. La fecha de modificación del archivo no se usa.";
+    return;
+  }
+  document.querySelector("#locate-when").value = found.localValue;
+  note.textContent = found.note;
+});
+
 document.querySelector("#locate-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = document.querySelector("#locate-submit");
   const problems = [];
   const audioField = document.querySelector("#locate-audio");
   if (!audioField.files || !audioField.files[0]) problems.push("Elige un archivo de audio.");
-  if (!document.querySelector("#locate-when").value) problems.push("Indica la fecha y hora de inicio.");
-  const radius = Number(document.querySelector("#locate-radius").value);
+  if (!document.querySelector("#locate-when").value) problems.push("Indica la fecha y hora de inicio. Si el archivo no la trae, vale una ventana aproximada.");
   const uncertainty = Number(document.querySelector("#locate-uncertainty").value);
   const altitude = document.querySelector("#locate-alt").value;
-  if (!Number.isFinite(radius) || radius < 1 || radius > 40) problems.push("El radio de búsqueda tiene que estar entre 1 y 40 km.");
-  if (!Number.isFinite(uncertainty) || uncertainty < 0 || uncertainty > 60) problems.push("La incertidumbre tiene que estar entre 0 y 60 minutos.");
-  if (altitude === "" || !Number.isFinite(Number(altitude))) problems.push("Indica la altitud supuesta de la zona.");
+  if (!Number.isFinite(uncertainty) || uncertainty < 0 || uncertainty > 3) problems.push("La incertidumbre tiene que estar entre 0 y 3 horas.");
+  if (altitude !== "" && !Number.isFinite(Number(altitude))) problems.push("La altitud supuesta no es un número.");
   if (problems.length) {
     showLocateMessage(problems.join(" "));
     return;
   }
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
-  showLocateMessage("Analizando el audio. La zona marcada no es la respuesta.");
+  showLocateMessage("Analizando el audio para averiguar dónde se grabó.");
   try {
   const body = new FormData();
   body.append("file", audioField.files[0]);
@@ -71,60 +84,30 @@ document.querySelector("#locate-form").addEventListener("submit", async (event) 
   if (analysis.status !== "accepted") {
     renderLocation({
       status: "no_usable_event",
+      verdict: "failed",
+      verdict_label: "Insuficiente",
       message: analysis.message || "El audio no tiene una pista utilizable.",
+      summary: analysis.message || "El audio no tiene una pista utilizable.",
       hypotheses: [],
       prior_is_result: false,
+      show_point: false,
     });
     return;
   }
-  const place = document.querySelector("#locate-place").value;
-  showLocateMessage("Consultando trayectorias históricas en una zona más amplia que la búsqueda.");
-  let history;
-  try {
-    history = await postJSON("/api/history", {
-      place,
-      lat: document.querySelector("#locate-lat").value,
-      lon: document.querySelector("#locate-lon").value,
-      local_datetime: document.querySelector("#locate-when").value,
-      window_min: Math.min(180, uncertainty + 3),
-      radius_km: Math.min(120, radius + 25),
-      provider: "adsb_aero",
-    });
-  } catch (error) {
-    renderLocation({ status: "incomplete", message: error.message, hypotheses: [], prior_is_result: false });
-    return;
-  }
-  state.history = history;
-  if (!history.flights) {
-    renderLocation({
-      status: "incomplete",
-      reason: history.status,
-      message: history.message,
-      hypotheses: [],
-      prior_is_result: false,
-      zero_flights_claim: false,
-    });
-    return;
-  }
-    showLocateMessage("Puntuando celdas. El centro de la zona no se toma como micrófono.");
+  showLocateMessage("Comprobando si el área por defecto cabe en este servicio.");
   try {
     const ridges = Array.isArray(analysis.ridges) && analysis.ridges.length ? analysis.ridges : [analysis.ridge];
-    const found = await postJSON("/api/locate", {
+    const payload = {
       ridge: { ...ridges[0], status: analysis.status },
       events: ridges.length > 1 ? ridges.slice(0, 4).map((item) => ({ ...item, status: "accepted" })) : undefined,
-      flights: history.flights,
-      prior: {
-        lat: Number(document.querySelector("#locate-lat").value),
-        lon: Number(document.querySelector("#locate-lon").value),
-        radius_km: radius,
-      },
+      region: currentRegionSpec(),
       recording_start_local: document.querySelector("#locate-when").value,
-      uncertainty_min: uncertainty,
-      altitude_m: document.querySelector("#locate-alt").value,
-      history_status: history.status,
-    });
-    state.location = found;
-    renderLocation(found);
+      uncertainty_h: uncertainty,
+    };
+    if (altitude !== "") payload.altitude_m = altitude;
+    const found = await postJSON("/api/locate", payload);
+    state.location = found.job_id ? await pollLocateJob(found.job_id) : found;
+    renderLocation(state.location);
   } catch (error) {
     showLocateMessage(error.message || "No se pudo completar la búsqueda.");
   }
@@ -135,6 +118,100 @@ document.querySelector("#locate-form").addEventListener("submit", async (event) 
     button.removeAttribute("aria-busy");
   }
 });
+
+async function clipClockFromFile(file) {
+  const head = new Uint8Array(await file.slice(0, Math.min(file.size, 524288)).arrayBuffer());
+  let found = clipClockFromBuffer(head);
+  if (!found && file.size > 524288) {
+    const tail = new Uint8Array(await file.slice(Math.max(0, file.size - 524288)).arrayBuffer());
+    found = clipClockFromBuffer(tail);
+  }
+  return found;
+}
+
+function clipClockFromBuffer(bytes) {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const latin = new TextDecoder("latin1").decode(view);
+  const id3 = readId3Stamp(view, latin);
+  if (id3) return id3;
+  const wav = readWavStamp(view, latin);
+  if (wav) return wav;
+  return readMvhdStamp(view, latin);
+}
+
+function readId3Stamp(view, latin) {
+  if (view.length < 10 || latin.slice(0, 3) !== "ID3") return null;
+  const frame = latin.indexOf("TDRC");
+  if (frame < 10) return null;
+  const size = (view[frame + 4] << 24) | (view[frame + 5] << 16) | (view[frame + 6] << 8) | view[frame + 7];
+  if (size < 2 || frame + 10 + size > view.length) return null;
+  const raw = latin.slice(frame + 11, frame + 10 + size).replace(/\u0000/g, "").trim();
+  const parsed = parseStamp(raw);
+  if (!parsed) return null;
+  return {
+    localValue: parsed.value,
+    note: "Hora leída de la etiqueta ID3 del archivo, en este navegador. " + parsed.note + " Revísala: a veces es la hora del codificador, no la de la grabación.",
+  };
+}
+
+function readWavStamp(view, latin) {
+  const icrd = latin.indexOf("ICRD");
+  if (icrd >= 0 && icrd + 8 < view.length) {
+    const size = view[icrd + 4] | (view[icrd + 5] << 8) | (view[icrd + 6] << 16) | (view[icrd + 7] << 24);
+    const raw = latin.slice(icrd + 8, icrd + 8 + Math.min(size, 32)).replace(/\u0000/g, "").trim();
+    const parsed = parseStamp(raw);
+    if (parsed) {
+      return { localValue: parsed.value, note: "Hora leída del WAV (ICRD) en este navegador. " + parsed.note };
+    }
+  }
+  const bext = latin.indexOf("bext");
+  if (bext >= 0 && bext + 8 + 320 + 18 <= view.length) {
+    const date = latin.slice(bext + 8 + 320, bext + 8 + 330);
+    const clock = latin.slice(bext + 8 + 330, bext + 8 + 338);
+    const parsed = parseStamp(date + "T" + clock);
+    if (parsed) {
+      return { localValue: parsed.value, note: "Hora leída de la cabecera bext del WAV en este navegador. " + parsed.note };
+    }
+  }
+  return null;
+}
+
+function readMvhdStamp(view, latin) {
+  const at = latin.indexOf("mvhd");
+  if (at < 0 || at + 20 > view.length) return null;
+  const version = view[at + 8];
+  let seconds = 0;
+  if (version === 0) {
+    seconds = (view[at + 12] * 2 ** 24) + (view[at + 13] << 16) + (view[at + 14] << 8) + view[at + 15];
+  } else if (at + 24 <= view.length) {
+    seconds = (view[at + 16] * 2 ** 24) + (view[at + 17] << 16) + (view[at + 18] << 8) + view[at + 19];
+  }
+  if (!seconds) return null;
+  const utc = new Date(Date.UTC(1904, 0, 1) + seconds * 1000);
+  if (Number.isNaN(utc.getTime())) return null;
+  const madrid = new Date(utc.getTime() + 60 * 60 * 1000);
+  const value = madrid.toISOString().slice(0, 16);
+  return {
+    localValue: value,
+    note: "Hora de creación del contenedor MP4, leída en este navegador. Suele ser la del codificador, no la de la grabación. Se muestra en Europe/Madrid (UTC+1, sin horario de verano).",
+  };
+}
+
+function parseStamp(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  const zulu = /Z$|[+-]\d{2}:?\d{2}$/.test(text);
+  const match = text.match(/(\d{4})-?(\d{2})-?(\d{2})[T ]?(\d{2})?:?(\d{2})?/);
+  if (!match) return null;
+  const value = match[1] + "-" + match[2] + "-" + match[3] + "T" + (match[4] || "00") + ":" + (match[5] || "00");
+  if (zulu) {
+    const utc = new Date(text.endsWith("Z") || text.includes("T") ? text : value + "Z");
+    if (Number.isNaN(utc.getTime())) return { value, note: "Sin zona horaria en el archivo; se interpreta como Europe/Madrid." };
+    const madrid = new Date(utc.getTime() + 60 * 60 * 1000);
+    return { value: madrid.toISOString().slice(0, 16), note: "El archivo trae zona horaria; se muestra en Europe/Madrid (UTC+1, sin horario de verano)." };
+  }
+  return { value, note: "Sin zona horaria en el archivo; se interpreta como Europe/Madrid." };
+}
 
 function showLocateMessage(text) {
   locateOut.replaceChildren();
@@ -157,6 +234,32 @@ function renderLocation(result) {
   const note = document.createElement("p");
   note.textContent = "Ningún punto se muestra como seguro. Identificación única: no. El centro de búsqueda no es un punto recuperado.";
   card.append(title, message, note);
+  if (result.coverage_note) {
+    const limit = document.createElement("p");
+    limit.className = "warn";
+    limit.textContent = result.coverage_note;
+    card.append(limit);
+  }
+  if (result.plan) {
+    const cost = document.createElement("p");
+    cost.textContent = result.plan.tile_count + " teselas de " + result.plan.tile_radius_km + " km, " + result.plan.queries + " consultas a adsb.aero en el peor caso, cota de red " + Math.round(result.plan.time_bound_s) + " s. " + (result.plan.time_note || "");
+    card.append(cost);
+    if (result.plan.altitude_note) {
+      const altitude = document.createElement("p");
+      altitude.textContent = result.plan.altitude_note;
+      card.append(altitude);
+    }
+    if (result.plan.clock_note) {
+      const clockNote = document.createElement("p");
+      clockNote.textContent = result.plan.clock_note;
+      card.append(clockNote);
+    }
+  }
+  if (result.local_mode) {
+    const local = document.createElement("p");
+    local.textContent = "Modo local, opcional, en tu ordenador y sin cargos de este servicio: " + result.local_mode.plan_command + " y, para ejecutarlo, " + result.local_mode.run_command + ". " + (result.local_mode.note || "");
+    card.append(local);
+  }
   const regions = result.regions || {};
   const band68 = regions["68"] || {};
   const band90 = regions["90"] || {};
@@ -227,9 +330,10 @@ function drawSearch(result) {
   const hypotheses = (result && result.hypotheses) || [];
   const context = canvas.getContext("2d");
   context.clearRect(0, 0, canvas.width, canvas.height);
-  const lat = Number(document.querySelector("#locate-lat").value);
-  const lon = Number(document.querySelector("#locate-lon").value);
-  const radius = Number(document.querySelector("#locate-radius").value) || 20;
+  const frame = (result && result.map) || { lat: 40.2, lon: -3.2, radius_km: 750 };
+  const lat = Number(frame.lat);
+  const lon = Number(frame.lon);
+  const radius = Number(frame.radius_km) || 750;
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
   const kx = 111.32 * Math.cos(lat * Math.PI / 180);
   const ky = 110.57;
@@ -244,7 +348,15 @@ function drawSearch(result) {
   context.arc(canvas.width / 2, canvas.height / 2, canvas.width * 0.4 * (radius / span), 0, Math.PI * 2);
   context.stroke();
   context.fillStyle = "#8fb4d6";
-  context.fillText("68 % y 90 %: regiones, no una certeza", 16, 24);
+  context.fillText("Área de búsqueda, no el lugar de la grabación", 16, 24);
+  const tiles = (result.plan && result.plan.tiles) || [];
+  context.strokeStyle = "#314052";
+  tiles.forEach((tile) => {
+    const [x, y] = project(tile.lat, tile.lon);
+    context.beginPath();
+    context.arc(x, y, radiusPx(tile.radius_km * 1000), 0, Math.PI * 2);
+    context.stroke();
+  });
   const band90 = (result.regions && result.regions["90"]) || {};
   const band68 = (result.regions && result.regions["68"]) || {};
   (band90.cells || []).forEach((item) => {
@@ -281,6 +393,139 @@ function drawSearch(result) {
     });
   }
 }
+
+const extraIds = [];
+let regionCatalog = null;
+
+function currentRegionSpec() {
+  const base = document.querySelector("#locate-region").value || "unsure";
+  if (!extraIds.length || base === "unsure" || base === "iberia" || String(base).startsWith("cc:")) return base;
+  return [base, ...extraIds].join(",");
+}
+
+async function loadRegions() {
+  let response;
+  try {
+    response = await fetch("/api/regions", { credentials: "same-origin", headers: { "Accept": "application/json" } });
+  } catch (error) {
+    window.__errors.push(String(error));
+    return;
+  }
+  if (!response.ok) {
+    window.__errors.push("regions " + response.status);
+    return;
+  }
+  regionCatalog = await response.json();
+  const select = document.querySelector("#locate-region");
+  regionCatalog.groups.forEach((group) => {
+    const box = document.createElement("optgroup");
+    box.label = group.name;
+    group.items.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = item.name;
+      box.append(option);
+    });
+    select.append(box);
+  });
+  select.addEventListener("change", () => {
+    extraIds.splice(0, extraIds.length);
+    refreshRegionPlan();
+  });
+  document.querySelector("#locate-extra").addEventListener("change", () => {
+    const value = document.querySelector("#locate-extra").value;
+    if (value && !extraIds.includes(value)) extraIds.push(value);
+    document.querySelector("#locate-extra").value = "";
+    refreshRegionPlan();
+  });
+  refreshRegionPlan();
+}
+
+async function refreshRegionPlan() {
+  const spec = currentRegionSpec();
+  const response = await fetch("/api/region-plan?region=" + encodeURIComponent(spec), { credentials: "same-origin", headers: { "Accept": "application/json" } });
+  if (!response.ok) return;
+  const plan = await response.json();
+  const note = document.querySelector("#locate-fit");
+  const verb = plan.fits_free_web
+    ? "Cabe en este servicio: " + plan.tile_count + " tesela, " + plan.queries + " llamadas, hasta " + Math.round(plan.search_bound_s) + " s. Se buscará solo en " + plan.label + "."
+    : "No cabe en este servicio: " + plan.tile_count + " teselas, " + plan.queries + " llamadas, hasta " + Math.round(plan.search_bound_s) + " s. No se buscará solo una parte: hará falta el modo local.";
+  note.textContent = verb;
+  fillExtraProvinces(spec);
+  const chosen = document.querySelector("#locate-chosen");
+  chosen.replaceChildren();
+  extraIds.forEach((id) => {
+    const item = document.createElement("li");
+    item.textContent = provinceName(id) + " ";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = "Quitar";
+    button.addEventListener("click", () => {
+      const index = extraIds.indexOf(id);
+      if (index >= 0) extraIds.splice(index, 1);
+      refreshRegionPlan();
+    });
+    item.append(button);
+    chosen.append(item);
+  });
+  drawSearch({ map: plan.map, plan: { tiles: plan.tiles }, hypotheses: [], show_point: false, regions: {} });
+}
+
+function fillExtraProvinces(spec) {
+  const extra = document.querySelector("#locate-extra");
+  extra.replaceChildren();
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "Ninguna más";
+  extra.append(blank);
+  const base = document.querySelector("#locate-region").value;
+  if (!regionCatalog || !base || base === "unsure" || base === "iberia" || String(base).startsWith("cc:")) return;
+  const selected = new Set([base, ...extraIds]);
+  const neighborIds = new Set();
+  selected.forEach((id) => {
+    const item = findProvince(id);
+    (item && item.neighbors || []).forEach((neighbor) => {
+      if (!selected.has(neighbor)) neighborIds.add(neighbor);
+    });
+  });
+  neighborIds.forEach((id) => {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = provinceName(id);
+    extra.append(option);
+  });
+}
+
+function findProvince(id) {
+  if (!regionCatalog) return null;
+  for (const group of regionCatalog.groups) {
+    for (const item of group.items) {
+      if (item.id === id) return item;
+    }
+  }
+  return null;
+}
+
+function provinceName(id) {
+  const item = findProvince(id);
+  return item ? item.name : id;
+}
+
+async function pollLocateJob(jobId) {
+  for (let attempt = 0; attempt < 140; attempt += 1) {
+    const response = await fetchLimited("/api/locate-jobs/" + jobId, { credentials: "same-origin", headers: { "Accept": "application/json" } });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.message || "No se pudo seguir la búsqueda.");
+    if (body.state === "done") return body.result;
+    showLocateMessage((body.phase || "Buscando en la zona elegida.") + " " + (body.tiles_done || 0) + "/" + (body.tiles_total || 1));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error("La búsqueda sigue en curso más de lo previsto. No se muestra un resultado parcial.");
+}
+
+loadRegions();
+window.__appReady = true;
 
 document.querySelector("#audio-form").addEventListener("submit", async (event) => {
   event.preventDefault();
